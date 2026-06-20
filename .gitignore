@@ -73,3 +73,6 @@ auth_failures.log
 .codex
 .claude/worktrees
 jean.json
+
+# Cloudflare Tunnel credentials (secret)
+deploy/cloudflared/*.json

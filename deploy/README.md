@@ -34,22 +34,40 @@ this repo is checked out.
 
 ## Deploy
 
-### 1. Create the Cloudflare Tunnel  *(manual, one-time — needs a human in the dashboard)*
-1. **Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared.**
-2. Name it `karakeep-minipc` → **Save** → copy the **token**.
-3. **Public Hostname → Add a public hostname:**
-   - Subdomain `karakeep`, Domain `modeltok.com`
-   - Type `HTTP`, URL `web:3000`  *(compose service name; reached over the private network)*
-   - Save → this auto-creates the `karakeep.modeltok.com` CNAME.
+### 1. Create the Cloudflare Tunnel  *(CLI, one-time — no dashboard needed)*
+```bash
+cloudflared tunnel login                                   # browser auth; pick the modeltok.com zone
+cloudflared tunnel create karakeep-minipc                  # writes ~/.cloudflared/<UUID>.json
+cloudflared tunnel route dns <UUID> karakeep.modeltok.com  # auto-creates the CNAME
+```
+> **Use the tunnel's UUID** (printed by `create`, also in `cloudflared tunnel list`), not the
+> name, for `route dns` — some cloudflared builds misresolve the name to another tunnel.
+
+Then wire the credentials + ingress into `deploy/cloudflared/` (the compose `cloudflared`
+service runs in locally-managed mode from this dir — no `TUNNEL_TOKEN`):
+```bash
+cd deploy && mkdir -p cloudflared
+cp ~/.cloudflared/<UUID>.json cloudflared/
+chmod 644 cloudflared/<UUID>.json                          # readable by the container's nonroot user
+cat > cloudflared/config.yml <<YAML
+tunnel: <UUID>
+credentials-file: /etc/cloudflared/<UUID>.json
+ingress:
+  - hostname: karakeep.modeltok.com
+    service: http://web:3000
+  - service: http_status:404
+YAML
+```
+The `<UUID>.json` is gitignored (it is secret); `config.yml` is safe to commit.
 
 ### 2. Configure
 ```bash
 cd deploy
 cp .env.example .env
-# generate secrets and drop in the tunnel token:
+# generate the two secrets:
 sed -i "s|^NEXTAUTH_SECRET=.*|NEXTAUTH_SECRET=$(openssl rand -base64 36)|" .env
 sed -i "s|^MEILI_MASTER_KEY=.*|MEILI_MASTER_KEY=$(openssl rand -base64 36)|" .env
-# then edit .env and paste TUNNEL_TOKEN from step 1
+# (no TUNNEL_TOKEN needed — the tunnel is configured via cloudflared/config.yml above)
 ```
 
 ### 3. Launch

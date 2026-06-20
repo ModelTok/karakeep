@@ -1,0 +1,8 @@
+# Locally-managed Cloudflare Tunnel config for karakeep-minipc.
+# Created via the cloudflared CLI (tunnel create + route dns). No dashboard needed.
+tunnel: f7112fa4-041f-4a47-9f08-4369ed3a2392
+credentials-file: /etc/cloudflared/f7112fa4-041f-4a47-9f08-4369ed3a2392.json
+ingress:
+  - hostname: karakeep.modeltok.com
+    service: http://web:3000
+  - service: http_status:404

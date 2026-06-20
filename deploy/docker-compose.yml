@@ -74,9 +74,11 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    # Locally-managed tunnel: ingress + credentials come from ./cloudflared (created via the
+    # cloudflared CLI — tunnel create + route dns). No dashboard / TUNNEL_TOKEN needed.
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
     depends_on: [web]
 
 volumes:
