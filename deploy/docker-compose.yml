@@ -1,0 +1,85 @@
+# Karakeep self-host stack: web + Meilisearch + Chrome + local Ollama, fronted by Cloudflare Tunnel.
+# Target: an always-on Linux host (e.g. a mini PC). Deployed at https://karakeep.modeltok.com
+# Inference runs fully local via the bundled Ollama service (no OpenAI key needed).
+#
+# Deploy:
+#   cp .env.example .env            # then fill the secrets (see README.md)
+#   docker compose up -d
+#   ./pull-models.sh                # one-time: pull the Ollama models
+#
+# All state lives in the named volumes below, independent of where this repo is checked out.
+
+services:
+  web:
+    image: ghcr.io/karakeep-app/karakeep:${KARAKEEP_VERSION:-release}
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      MEILI_ADDR: http://meilisearch:7700
+      BROWSER_WEB_URL: http://chrome:9222
+      DATA_DIR: /data
+      # ---- local inference via the bundled Ollama service ----
+      OLLAMA_BASE_URL: http://ollama:11434
+      INFERENCE_TEXT_MODEL: ${INFERENCE_TEXT_MODEL:-llama3.2}
+      INFERENCE_IMAGE_MODEL: ${INFERENCE_IMAGE_MODEL:-llava}
+      EMBEDDING_TEXT_MODEL: ${EMBEDDING_TEXT_MODEL:-nomic-embed-text}
+      INFERENCE_CONTEXT_LENGTH: "4096"
+      INFERENCE_JOB_TIMEOUT_SEC: "120"   # generous, for CPU-only inference
+      OLLAMA_KEEP_ALIVE: 5m
+      INFERENCE_ENABLE_AUTO_TAGGING: "true"
+      INFERENCE_ENABLE_AUTO_SUMMARIZATION: "true"
+    volumes:
+      - data:/data
+    ports:
+      - "3000:3000"          # optional: LAN access / first-run testing. Safe to remove —
+                             # cloudflared reaches the app internally at web:3000.
+    depends_on: [meilisearch, chrome, ollama]
+
+  chrome:
+    image: gcr.io/zenika-hub/alpine-chrome:124
+    restart: unless-stopped
+    command:
+      - --no-sandbox
+      - --disable-gpu
+      - --disable-dev-shm-usage
+      - --remote-debugging-address=0.0.0.0
+      - --remote-debugging-port=9222
+      - --hide-scrollbars
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.41.0
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meilisearch:/meili_data
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    # ---- Optional NVIDIA GPU acceleration ----
+    # Requires nvidia-container-toolkit on the host. Uncomment to enable;
+    # without it, Ollama runs on CPU (slower but works — keep the generous timeout above).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    depends_on: [web]
+
+volumes:
+  meilisearch:
+  data:
+  ollama:
