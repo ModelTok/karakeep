@@ -25,6 +25,7 @@ import {
   Image,
   Link,
   List,
+  Newspaper,
   Rss,
   Smartphone,
   TrendingUp,
@@ -72,6 +73,7 @@ function formatSourceName(source: BookmarkSource | null): string {
     singlefile: "SingleFile",
     rss: "RSS Feed",
     import: "Import",
+    digest: "Digest",
   };
   return sourceMap[source];
 }
@@ -95,6 +97,8 @@ function getSourceIcon(source: BookmarkSource | null): React.ReactNode {
       return <Rss {...iconProps} />;
     case "import":
       return <Upload {...iconProps} />;
+    case "digest":
+      return <Newspaper {...iconProps} />;
     default:
       return <HelpCircle {...iconProps} />;
   }

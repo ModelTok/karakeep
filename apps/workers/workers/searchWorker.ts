@@ -94,10 +94,15 @@ async function runIndex(
           url: bookmark.link.url,
           linkTitle: bookmark.link.title,
           description: bookmark.link.description,
-          content: await Bookmark.getBookmarkPlainTextContent(
-            bookmark.link,
-            bookmark.userId,
-          ),
+          content: [
+            await Bookmark.getBookmarkPlainTextContent(
+              bookmark.link,
+              bookmark.userId,
+            ),
+            bookmark.link.transcript,
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
           publisher: bookmark.link.publisher,
           author: bookmark.link.author,
           datePublished: bookmark.link.datePublished,

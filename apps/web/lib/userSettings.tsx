@@ -13,6 +13,7 @@ export const UserSettingsContext = createContext<ZUserSettings>({
   backupsEnabled: false,
   backupsFrequency: "daily",
   backupsRetentionDays: 7,
+  digestEnabled: false,
   readerFontSize: null,
   readerLineHeight: null,
   readerFontFamily: null,

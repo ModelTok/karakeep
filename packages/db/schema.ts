@@ -73,6 +73,11 @@ export const users = sqliteTable("user", {
     .default("weekly"),
   backupsRetentionDays: integer("backupsRetentionDays").notNull().default(30),
 
+  // Digest Settings
+  digestEnabled: integer("digestEnabled", { mode: "boolean" })
+    .notNull()
+    .default(false),
+
   // Reader view settings (nullable = opt-in, null means use client default)
   readerFontSize: integer("readerFontSize"),
   readerLineHeight: real("readerLineHeight"),
@@ -226,6 +231,7 @@ export const bookmarks = sqliteTable(
         "singlefile",
         "rss",
         "import",
+        "digest",
       ],
     }),
   },
@@ -275,6 +281,10 @@ export const bookmarkLinks = sqliteTable(
       enum: ["pending", "failure", "success"],
     }).default("pending"),
     crawlStatusCode: integer("crawlStatusCode").default(200),
+    transcript: text("transcript"),
+    transcriptionStatus: text("transcriptionStatus", {
+      enum: ["pending", "failure", "success"],
+    }),
   },
   (bl) => [index("bookmarkLinks_url_idx").on(bl.url)],
 );

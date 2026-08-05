@@ -1,9 +1,15 @@
-# Karakeep self-host stack: web + Meilisearch + Chrome + local Ollama, fronted by Cloudflare Tunnel.
-# Target: an always-on Linux host (e.g. a mini PC). Deployed at https://karakeep.modeltok.com
+# Karakeep self-host stack: web + Meilisearch + Chrome + local Ollama + local ASR,
+# fronted by Cloudflare Tunnel. Target: an always-on Linux host (e.g. a mini PC).
+# Deployed at https://karakeep.modeltok.com
 # Inference runs fully local via the bundled Ollama service (no OpenAI key needed).
+#
+# `web` is built from this checkout (not the upstream prebuilt image) because it carries
+# a custom video-transcription worker. Rebuild it whenever you pull new source changes:
+#   docker compose build web && docker compose up -d
 #
 # Deploy:
 #   cp .env.example .env            # then fill the secrets (see README.md)
+#   docker compose build            # builds `web` from source (first run: several minutes)
 #   docker compose up -d
 #   ./pull-models.sh                # one-time: pull the Ollama models
 #
@@ -11,7 +17,10 @@
 
 services:
   web:
-    image: ghcr.io/karakeep-app/karakeep:${KARAKEEP_VERSION:-release}
+    build:
+      dockerfile: docker/Dockerfile
+      context: ..
+      target: aio
     restart: unless-stopped
     env_file: [.env]
     environment:
@@ -28,12 +37,16 @@ services:
       OLLAMA_KEEP_ALIVE: 5m
       INFERENCE_ENABLE_AUTO_TAGGING: "true"
       INFERENCE_ENABLE_AUTO_SUMMARIZATION: "true"
+      # ---- video download + local transcription (via the bundled whisper-asr service) ----
+      CRAWLER_VIDEO_DOWNLOAD: ${CRAWLER_VIDEO_DOWNLOAD:-false}
+      CRAWLER_TRANSCRIBE_VIDEO: ${CRAWLER_TRANSCRIBE_VIDEO:-false}
+      TRANSCRIPTION_API_URL: http://whisper-asr:9000
     volumes:
       - data:/data
     ports:
       - "3000:3000"          # optional: LAN access / first-run testing. Safe to remove —
                              # cloudflared reaches the app internally at web:3000.
-    depends_on: [meilisearch, chrome, ollama]
+    depends_on: [meilisearch, chrome, ollama, whisper-asr]
 
   chrome:
     image: gcr.io/zenika-hub/alpine-chrome:124
@@ -71,6 +84,15 @@ services:
     #           count: all
     #           capabilities: [gpu]
 
+  whisper-asr:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    restart: unless-stopped
+    environment:
+      ASR_ENGINE: faster_whisper
+      ASR_MODEL: ${TRANSCRIPTION_MODEL:-base}
+    volumes:
+      - whisper-cache:/root/.cache
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
@@ -85,3 +107,4 @@ volumes:
   meilisearch:
   data:
   ollama:
+  whisper-cache:

@@ -32,6 +32,7 @@ async function fetchBookmarkDetailsForSummary(bookmarkId: string) {
           publisher: true,
           author: true,
           url: true,
+          transcript: true,
         },
       },
       // If assets (like PDFs with extracted text) should be summarized, extend here
@@ -102,7 +103,7 @@ export async function runSummarization(
       (await Bookmark.getBookmarkPlainTextContent(link, bookmarkData.userId)) ??
       "";
 
-    if (!link.description && !content) {
+    if (!link.description && !content && !link.transcript) {
       // No content to infer from; skip summarization
       logger.info(
         `[inference] No content found for link "${bookmarkId}". Skipping summary.`,
@@ -114,6 +115,7 @@ export async function runSummarization(
 Title: ${link.title ?? ""}
 Description: ${link.description ?? ""}
 Content: ${content}
+Transcript: ${link.transcript ?? ""}
 Publisher: ${link.publisher ?? ""}
 Author: ${link.author ?? ""}
 URL: ${link.url ?? ""}

@@ -7,20 +7,24 @@ running locally through a bundled Ollama** (no OpenAI key required).
 ## What's in here
 | File | Purpose |
 |---|---|
-| `docker-compose.yml` | The full stack: `web` + `meilisearch` + `chrome` + `ollama` + `cloudflared` |
+| `docker-compose.yml` | The full stack: `web` + `meilisearch` + `chrome` + `ollama` + `whisper-asr` + `cloudflared` |
 | `.env.example` | Template for secrets/config — copy to `.env` (real `.env` is gitignored) |
 | `pull-models.sh` | Pulls the Ollama models after first boot |
 
-State persists in Docker named volumes (`data`, `meilisearch`, `ollama`) regardless of where
-this repo is checked out.
+State persists in Docker named volumes (`data`, `meilisearch`, `ollama`, `whisper-cache`)
+regardless of where this repo is checked out.
+
+`web` is **built from this checkout** (`docker/Dockerfile`, `target: aio`), not pulled from
+the upstream `ghcr.io/karakeep-app/karakeep` image — this fork carries a custom video-transcription
+worker that isn't in upstream. Run `docker compose build web` after pulling new source changes.
 
 ## Architecture
 ```
   mini PC (this host)
-  ┌─────────────────────────────────────────────┐         Cloudflare edge          You
-  │ web ─ meilisearch ─ chrome ─ ollama (local)  │   ──►  cloudflared tunnel  ──►  karakeep.modeltok.com
-  │            └────────── cloudflared ──────────┼──►     (auto CNAME + TLS,       (+ optional
-  └─────────────────────────────────────────────┘         no open ports)           Cloudflare Access)
+  ┌───────────────────────────────────────────────────────────┐   Cloudflare edge      You
+  │ web ─ meilisearch ─ chrome ─ ollama (local) ─ whisper-asr  │──► cloudflared tunnel ─► karakeep.modeltok.com
+  │            └────────────── cloudflared ──────────────────┼─►   (auto CNAME + TLS,   (+ optional
+  └───────────────────────────────────────────────────────────┘   no open ports)        Cloudflare Access)
 ```
 
 ## Prerequisites
@@ -72,6 +76,7 @@ sed -i "s|^MEILI_MASTER_KEY=.*|MEILI_MASTER_KEY=$(openssl rand -base64 36)|" .en
 
 ### 3. Launch
 ```bash
+docker compose build                  # builds `web` from source — several minutes on first run
 docker compose up -d
 docker compose logs -f cloudflared    # expect "Registered tunnel connection"
 ./pull-models.sh                      # one-time model download (can take a while on first run)
@@ -103,11 +108,24 @@ To change models: set them in `.env`, then re-run `./pull-models.sh` and `docker
 Lighter text model for weak hardware: `llama3.2:1b`. Heavier/better: `qwen2.5:7b`.
 For GPU acceleration, uncomment the `deploy:` block on the `ollama` service.
 
+## Video download + transcription (local whisper-asr)
+Off by default. Enable in `.env`:
+```bash
+CRAWLER_VIDEO_DOWNLOAD=true      # download bookmarked videos via yt-dlp
+CRAWLER_TRANSCRIBE_VIDEO=true    # transcribe them via the bundled whisper-asr sidecar
+```
+The transcript feeds auto-tagging, summarization, and search — no external API involved.
+First run pulls/caches the whisper model (`TRANSCRIPTION_MODEL`, default `base`); watch
+progress with `docker compose logs -f whisper-asr`. Bigger models (`small`, `medium`) are
+more accurate but slower on CPU. Transcription is asynchronous — tags/summary update a
+short while after the video finishes downloading, not immediately.
+
 ## Operations
 ```bash
-docker compose pull && docker compose up -d   # update images
-docker compose logs -f web                    # app logs
-docker compose down                           # stop (volumes/data preserved)
+docker compose build web && docker compose up -d   # rebuild + apply source changes
+docker compose pull && docker compose up -d         # update the other (non-`web`) images
+docker compose logs -f web                          # app logs
+docker compose down                                 # stop (volumes/data preserved)
 # Backup the bookmarks DB + assets:
 docker run --rm -v karakeep_data:/data -v "$PWD":/backup alpine \
   tar czf /backup/karakeep-data-backup.tar.gz -C /data .

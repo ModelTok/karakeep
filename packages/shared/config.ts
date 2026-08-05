@@ -116,6 +116,11 @@ const allEnv = z.object({
   CRAWLER_VIDEO_DOWNLOAD: stringBool("false"),
   CRAWLER_VIDEO_DOWNLOAD_MAX_SIZE: z.coerce.number().default(50),
   CRAWLER_VIDEO_DOWNLOAD_TIMEOUT_SEC: z.coerce.number().default(10 * 60),
+  CRAWLER_TRANSCRIBE_VIDEO: stringBool("false"),
+  TRANSCRIPTION_API_URL: z.string().default("http://whisper-asr:9000"),
+  TRANSCRIPTION_LANGUAGE: z.string().optional(),
+  TRANSCRIPTION_JOB_TIMEOUT_SEC: z.coerce.number().default(30 * 60),
+  TRANSCRIPTION_NUM_WORKERS: z.coerce.number().default(1),
   CRAWLER_ENABLE_ADBLOCKER: stringBool("true"),
   CRAWLER_YTDLP_ARGS: z
     .string()
@@ -375,6 +380,13 @@ const serverConfigSchema = allEnv.transform((val, ctx) => {
               maxRequests: val.CRAWLER_DOMAIN_RATE_LIMIT_MAX_REQUESTS,
             }
           : null,
+    },
+    transcription: {
+      enabled: val.CRAWLER_TRANSCRIBE_VIDEO,
+      apiUrl: val.TRANSCRIPTION_API_URL,
+      language: val.TRANSCRIPTION_LANGUAGE,
+      jobTimeoutSec: val.TRANSCRIPTION_JOB_TIMEOUT_SEC,
+      numWorkers: val.TRANSCRIPTION_NUM_WORKERS,
     },
     ocr: {
       langs: val.OCR_LANGS,

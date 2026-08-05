@@ -16,6 +16,7 @@ import {
   addLogFields,
   QuotaService,
   StorageQuotaError,
+  TranscriptionQueue,
   VideoWorkerQueue,
   ZVideoRequest,
   zvideoRequestSchema,
@@ -226,6 +227,14 @@ async function runWorker(job: DequeuedJob<ZVideoRequest>) {
     logger.info(
       `[VideoCrawler][${jobId}] Finished downloading video from "${normalizedUrl}" and adding it to the database`,
     );
+
+    if (serverConfig.transcription.enabled) {
+      await TranscriptionQueue.enqueue({
+        bookmarkId,
+        userId,
+        assetId: videoAssetId,
+      });
+    }
   } catch (error) {
     if (error instanceof StorageQuotaError) {
       logger.warn(

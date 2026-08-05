@@ -18,6 +18,7 @@ import {
   Image,
   KeyRound,
   Link,
+  Newspaper,
   Rss,
   Sparkles,
   User,
@@ -77,6 +78,11 @@ const settingsSidebarItems = (
       name: t("settings.backups.backups"),
       icon: <CloudDownload size={18} />,
       path: "/settings/backups",
+    },
+    {
+      name: t("settings.digest.digest"),
+      icon: <Newspaper size={18} />,
+      path: "/settings/digest",
     },
     {
       name: t("settings.import.import_export"),

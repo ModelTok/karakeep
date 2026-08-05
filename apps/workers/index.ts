@@ -6,6 +6,7 @@ import {
   AdminMaintenanceQueue,
   AssetPreprocessingQueue,
   BackupQueue,
+  DigestQueue,
   EmbeddingsQueue,
   FeedQueue,
   initEventLogger,
@@ -20,6 +21,7 @@ import {
   shutdownEventLogger,
   shutdownTracing,
   startQueue,
+  TranscriptionQueue,
   VideoWorkerQueue,
   WebhookQueue,
 } from "@karakeep/shared-server";
@@ -31,12 +33,14 @@ import { AdminMaintenanceWorker } from "./workers/adminMaintenanceWorker";
 import { AssetPreprocessingWorker } from "./workers/assetPreprocessingWorker";
 import { BackupSchedulingWorker, BackupWorker } from "./workers/backupWorker";
 import { CrawlerWorker } from "./workers/crawlerWorker";
+import { DigestSchedulingWorker, DigestWorker } from "./workers/digestWorker";
 import { EmbeddingsWorker } from "./workers/embeddingsWorker";
 import { FeedRefreshingWorker, FeedWorker } from "./workers/feedWorker";
 import { ImportWorker } from "./workers/importWorker";
 import { OpenAiWorker } from "./workers/inference/inferenceWorker";
 import { RuleEngineWorker } from "./workers/ruleEngineWorker";
 import { SearchIndexingWorker } from "./workers/searchWorker";
+import { TranscriptionWorker } from "./workers/transcriptionWorker";
 import { VideoWorker } from "./workers/videoWorker";
 import { WebhookWorker } from "./workers/webhookWorker";
 
@@ -69,6 +73,10 @@ const workerBuilders = {
     await VideoWorkerQueue.ensureInit();
     return VideoWorker.build();
   },
+  transcription: async () => {
+    await TranscriptionQueue.ensureInit();
+    return TranscriptionWorker.build();
+  },
   feed: async () => {
     await FeedQueue.ensureInit();
     return FeedWorker.build();
@@ -88,6 +96,10 @@ const workerBuilders = {
   backup: async () => {
     await BackupQueue.ensureInit();
     return BackupWorker.build();
+  },
+  digest: async () => {
+    await DigestQueue.ensureInit();
+    return DigestWorker.build();
   },
 } as const;
 
@@ -133,6 +145,10 @@ async function main() {
     BackupSchedulingWorker.start();
   }
 
+  if (workers.some((w) => w.name === "digest")) {
+    DigestSchedulingWorker.start();
+  }
+
   // Start import polling worker
   let importWorker: ImportWorker | null = null;
   let importWorkerPromise: Promise<void> | null = null;
@@ -159,6 +175,9 @@ async function main() {
   }
   if (workers.some((w) => w.name === "backup")) {
     BackupSchedulingWorker.stop();
+  }
+  if (workers.some((w) => w.name === "digest")) {
+    DigestSchedulingWorker.stop();
   }
   if (importWorker) {
     importWorker.stop();

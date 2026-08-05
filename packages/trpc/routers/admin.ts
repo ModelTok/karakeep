@@ -725,6 +725,7 @@ export const adminAppRouter = router({
             "singlefile",
             "rss",
             "import",
+            "digest",
           ])
           .nullable(),
         createdAt: z.date(),

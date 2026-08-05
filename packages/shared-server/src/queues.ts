@@ -260,6 +260,23 @@ export const VideoWorkerQueue = createDeferredQueue<ZVideoRequest>(
   },
 );
 
+export const ztranscriptionRequestSchema = z.object({
+  bookmarkId: z.string(),
+  userId: z.string(),
+  assetId: z.string(),
+});
+export type ZTranscriptionRequest = z.infer<typeof ztranscriptionRequestSchema>;
+
+export const TranscriptionQueue = createDeferredQueue<ZTranscriptionRequest>(
+  "transcription_queue",
+  {
+    defaultJobArgs: {
+      numRetries: 3,
+    },
+    keepFailedJobs: false,
+  },
+);
+
 // Feed Worker
 export const zFeedRequestSchema = z.object({
   feedId: z.string(),
@@ -330,6 +347,18 @@ export const zBackupRequestSchema = z.object({
 });
 export type ZBackupRequest = z.infer<typeof zBackupRequestSchema>;
 export const BackupQueue = createDeferredQueue<ZBackupRequest>("backup_queue", {
+  defaultJobArgs: {
+    numRetries: 2,
+  },
+  keepFailedJobs: false,
+});
+
+// Digest worker
+export const zDigestRequestSchema = z.object({
+  userId: z.string(),
+});
+export type ZDigestRequest = z.infer<typeof zDigestRequestSchema>;
+export const DigestQueue = createDeferredQueue<ZDigestRequest>("digest_queue", {
   defaultJobArgs: {
     numRetries: 2,
   },

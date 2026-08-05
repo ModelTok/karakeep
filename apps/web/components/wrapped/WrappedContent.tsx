@@ -15,6 +15,7 @@ import {
   Heart,
   Highlighter,
   Link,
+  Newspaper,
   Rss,
   Smartphone,
   Upload,
@@ -68,6 +69,7 @@ function formatSourceName(source: BookmarkSource | null): string {
     singlefile: "SingleFile",
     rss: "RSS Feed",
     import: "Import",
+    digest: "Digest",
   };
   return sourceMap[source];
 }
@@ -91,6 +93,8 @@ function getSourceIcon(source: BookmarkSource | null, className = "h-5 w-5") {
       return <Rss {...iconProps} />;
     case "import":
       return <Upload {...iconProps} />;
+    case "digest":
+      return <Newspaper {...iconProps} />;
     default:
       return <Globe {...iconProps} />;
   }

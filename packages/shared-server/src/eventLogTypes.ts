@@ -59,6 +59,10 @@ type EventLogInternal =
       "bookmark.id"?: string;
     }
   | {
+      ["event.name"]: "transcriptionWorker.run";
+      "bookmark.id"?: string;
+    }
+  | {
       ["event.name"]: "webhookWorker.run";
       "bookmark.id"?: string;
       "webhook.operation"?: string;
@@ -92,6 +96,10 @@ type EventLogInternal =
       "backup.bookmark_count"?: number;
       "backup.uncompressed_size"?: number;
       "backup.compressed_size"?: number;
+    }
+  | {
+      ["event.name"]: "digestWorker.run";
+      "digest.item_count"?: number;
     }
   // Product Events
   | {

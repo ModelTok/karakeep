@@ -622,6 +622,21 @@
         "backup_queued": "Backup job has been queued! It will be processed shortly.",
         "backup_deleted": "Backup has been deleted!"
       }
+    },
+    "digest": {
+      "digest": "Digest",
+      "page_title": "Digest",
+      "page_description": "Get a weekly Prasówka digest of everything you've saved in the last 7 days, delivered as a new bookmark in a \"Prasówka\" list.",
+      "configuration": {
+        "title": "Digest Configuration",
+        "enable_digest": "Enable Weekly Digest",
+        "enable_digest_description": "Every Monday, create a digest bookmark summarizing links you've saved in the last 7 days",
+        "send_now": "Send Digest Now",
+        "save_settings": "Save Settings"
+      },
+      "toasts": {
+        "digest_queued": "Digest job has been queued! It will be processed shortly."
+      }
     }
   },
   "admin": {

@@ -103,7 +103,7 @@ async function buildPrompt(
         bookmark.userId,
       )) ?? "";
 
-    if (!bookmark.link.description && !content) {
+    if (!bookmark.link.description && !content && !bookmark.link.transcript) {
       // No content to infer from; signal skip to avoid marking job as failed
       logger.info(
         `[inference] No content found for link "${bookmark.id}". Skipping tagging.`,
@@ -116,7 +116,8 @@ async function buildPrompt(
       `URL: ${bookmark.link.url}
 Title: ${bookmark.link.title ?? ""}
 Description: ${bookmark.link.description ?? ""}
-Content: ${content ?? ""}`,
+Content: ${content ?? ""}
+Transcript: ${bookmark.link.transcript ?? ""}`,
       serverConfig.inference.contextLength,
       tagStyle,
       curatedTags,
