@@ -185,6 +185,7 @@ describe("User Routes", () => {
       backupsEnabled: false,
       backupsFrequency: "weekly",
       backupsRetentionDays: 30,
+      digestEnabled: false,
 
       // Reader settings
       readerFontFamily: null,
@@ -227,6 +228,7 @@ describe("User Routes", () => {
       backupsEnabled: true,
       backupsFrequency: "daily",
       backupsRetentionDays: 7,
+      digestEnabled: false,
 
       // Reader settings
       readerFontFamily: "serif",

@@ -1,7 +1,4 @@
 <div align="center">
-    <a href="https://github.com/karakeep-app/karakeep/actions/workflows/ci.yml">
-        <img alt="GitHub Actions Workflow Status" src="https://img.shields.io/github/actions/workflow/status/karakeep-app/karakeep/ci.yml" />
-    </a>
     <a href="https://github.com/karakeep-app/karakeep/releases">
         <img alt="GitHub Release" src="https://img.shields.io/github/v/release/karakeep-app/karakeep" />
     </a>
