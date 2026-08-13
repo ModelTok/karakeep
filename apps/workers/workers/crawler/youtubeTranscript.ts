@@ -69,21 +69,44 @@ export async function fetchYoutubeTranscript(
     return null;
   }
 
-  const files = await fs.readdir(TMP_FOLDER);
-  const cleanupFiles = files.filter((f) => f.startsWith(jobId));
-  const srtFile =
-    files.find((f) => f.startsWith(jobId) && f.endsWith(".pl.srt")) ??
-    files.find((f) => f.startsWith(jobId) && f.endsWith(".srt"));
+  // Anything from here on (listing/reading/parsing the subtitle files) must
+  // never let an exception escape this function - a missing/unreadable
+  // transcript is a normal outcome for the crawl, not a fatal error - and
+  // whatever yt-dlp wrote to TMP_FOLDER for this jobId must always be
+  // cleaned up, on every exit path.
+  let cleanupFiles: string[] = [];
+  try {
+    const files = await fs.readdir(TMP_FOLDER);
+    cleanupFiles = files.filter((f) => f.startsWith(jobId));
+    const srtFile =
+      files.find((f) => f.startsWith(jobId) && f.endsWith(".pl.srt")) ??
+      files.find((f) => f.startsWith(jobId) && f.endsWith(".srt"));
 
-  if (!srtFile) {
-    await Promise.all(cleanupFiles.map((f) => fs.rm(path.join(TMP_FOLDER, f))));
+    if (!srtFile) {
+      return null;
+    }
+
+    const fullPath = path.join(TMP_FOLDER, srtFile);
+    const raw = await fs.readFile(fullPath, "utf8");
+    return parseSrt(raw);
+  } catch (e) {
+    logger.info(
+      `[Crawler][${jobId}] Failed to read yt-dlp subtitle output for "${url}": ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
     return null;
+  } finally {
+    await Promise.all(
+      cleanupFiles.map((f) =>
+        fs.rm(path.join(TMP_FOLDER, f)).catch((e) => {
+          logger.info(
+            `[Crawler][${jobId}] Failed to clean up temp yt-dlp file "${f}": ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+        }),
+      ),
+    );
   }
-
-  const fullPath = path.join(TMP_FOLDER, srtFile);
-  const raw = await fs.readFile(fullPath, "utf8");
-
-  await Promise.all(cleanupFiles.map((f) => fs.rm(path.join(TMP_FOLDER, f))));
-
-  return parseSrt(raw);
 }
