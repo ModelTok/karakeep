@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { BookmarkTagsEditor } from "@/components/dashboard/bookmarks/BookmarkTagsEditor";
 import { FullPageSpinner } from "@/components/ui/full-page-spinner";
 import { Separator } from "@/components/ui/separator";
@@ -25,8 +26,10 @@ import {
   PanelRightOpen,
   User,
 } from "lucide-react";
+import { useHotkeys } from "react-hotkeys-hook";
 
 import { useTRPC } from "@karakeep/shared-react/trpc";
+import type { ZGetBookmarksRequest } from "@karakeep/shared/types/bookmarks";
 import { BookmarkTypes, ZBookmark } from "@karakeep/shared/types/bookmarks";
 import {
   getBookmarkRefreshInterval,
@@ -137,6 +140,56 @@ export default function BookmarkPreview({
   const [activeTab, setActiveTab] = useState<string>("content");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { data: session } = useSession();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const listQueryParam = searchParams.get("listQuery");
+
+  let listQuery: ZGetBookmarksRequest | null = null;
+  if (listQueryParam) {
+    try {
+      listQuery = JSON.parse(listQueryParam) as ZGetBookmarksRequest;
+    } catch {
+      listQuery = null;
+    }
+  }
+
+  const { data: listData } = useQuery({
+    ...api.bookmarks.getBookmarks.queryOptions(listQuery ?? {}),
+    enabled: listQuery !== null,
+  });
+
+  const bookmarkIds = listData?.bookmarks.map((b) => b.id) ?? [];
+  const currentIndex = bookmarkIds.indexOf(bookmarkId);
+  const hasListContext = listQuery !== null && currentIndex !== -1;
+  const prevId =
+    hasListContext && currentIndex > 0 ? bookmarkIds[currentIndex - 1] : null;
+  const nextId =
+    hasListContext && currentIndex < bookmarkIds.length - 1
+      ? bookmarkIds[currentIndex + 1]
+      : null;
+
+  const navigateTo = (id: string) => {
+    router.push(
+      `/dashboard/preview/${id}?listQuery=${encodeURIComponent(listQueryParam!)}`,
+    );
+  };
+
+  useHotkeys(
+    "j",
+    () => {
+      if (nextId) navigateTo(nextId);
+    },
+    { enabled: !!nextId, preventDefault: true },
+    [nextId],
+  );
+  useHotkeys(
+    "k",
+    () => {
+      if (prevId) navigateTo(prevId);
+    },
+    { enabled: !!prevId, preventDefault: true },
+    [prevId],
+  );
 
   const { data: bookmark } = useQuery(
     api.bookmarks.getBookmark.queryOptions(
@@ -227,7 +280,14 @@ export default function BookmarkPreview({
       <AttachmentBox bookmark={bookmark} readOnly={!isOwner} />
       <HighlightsBox bookmarkId={bookmark.id} readOnly={!isOwner} />
       <Separator />
-      {isOwner && <ActionBar bookmark={bookmark} />}
+      <div className="flex items-center justify-between gap-2">
+        {isOwner && <ActionBar bookmark={bookmark} />}
+        {hasListContext && (
+          <span className="text-sm text-muted-foreground">
+            {currentIndex + 1}/{bookmarkIds.length}
+          </span>
+        )}
+      </div>
     </div>
   );
 
