@@ -70,18 +70,19 @@ export async function fetchYoutubeTranscript(
   }
 
   const files = await fs.readdir(TMP_FOLDER);
+  const cleanupFiles = files.filter((f) => f.startsWith(jobId));
   const srtFile =
     files.find((f) => f.startsWith(jobId) && f.endsWith(".pl.srt")) ??
     files.find((f) => f.startsWith(jobId) && f.endsWith(".srt"));
 
   if (!srtFile) {
+    await Promise.all(cleanupFiles.map((f) => fs.rm(path.join(TMP_FOLDER, f))));
     return null;
   }
 
   const fullPath = path.join(TMP_FOLDER, srtFile);
   const raw = await fs.readFile(fullPath, "utf8");
 
-  const cleanupFiles = files.filter((f) => f.startsWith(jobId));
   await Promise.all(cleanupFiles.map((f) => fs.rm(path.join(TMP_FOLDER, f))));
 
   return parseSrt(raw);
