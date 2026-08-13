@@ -316,7 +316,7 @@ function ListView({
   className,
   bookmarkIndex,
 }: Props) {
-  const { showNotes, showTags, showTitle, imageFit } =
+  const { showNotes, showTags, showTitle, showSummary, imageFit } =
     useBookmarkDisplaySettings();
   const imgFitClass = switchCase(imageFit, {
     cover: "object-cover",
@@ -351,6 +351,11 @@ function ListView({
           )}
           {content && <div className="shrink-1 overflow-hidden">{content}</div>}
           {note && <NotePreview note={note} bookmarkId={bookmark.id} />}
+          {showSummary && bookmark.summary && (
+            <p className="line-clamp-3 text-xs text-muted-foreground">
+              {bookmark.summary}
+            </p>
+          )}
           {showTags && (
             <div className="flex shrink-0 flex-wrap gap-1 overflow-hidden">
               <TagList
@@ -378,7 +383,7 @@ function GridView({
   fitHeight = false,
   bookmarkIndex,
 }: Props & { layout: BookmarksLayoutTypes }) {
-  const { showNotes, showTags, showTitle, imageFit } =
+  const { showNotes, showTags, showTitle, showSummary, imageFit } =
     useBookmarkDisplaySettings();
   const imgFitClass = switchCase(imageFit, {
     cover: "object-cover",
@@ -413,6 +418,11 @@ function GridView({
           )}
           {content && <div className="shrink-1 overflow-hidden">{content}</div>}
           {note && <NotePreview note={note} bookmarkId={bookmark.id} />}
+          {showSummary && bookmark.summary && (
+            <p className="line-clamp-3 text-xs text-muted-foreground">
+              {bookmark.summary}
+            </p>
+          )}
           {showTags && (
             <div className="flex shrink-0 flex-wrap gap-1 overflow-hidden">
               <TagList
@@ -436,7 +446,7 @@ function CompactView({
   className,
   bookmarkIndex,
 }: Props) {
-  const { showTitle } = useBookmarkDisplaySettings();
+  const { showTitle, showSummary } = useBookmarkDisplaySettings();
   const isBulkEditEnabled = useBulkActionsStore(
     (state) => state.isBulkEditEnabled,
   );
@@ -498,6 +508,11 @@ function CompactView({
           />
         </div>
       </div>
+      {showSummary && bookmark.summary && (
+        <p className="line-clamp-3 px-2 pb-2 text-xs text-muted-foreground">
+          {bookmark.summary}
+        </p>
+      )}
     </div>
   );
 }
