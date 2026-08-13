@@ -332,6 +332,11 @@ function ListView({
       )}
       data-bookmark-index={bookmarkIndex}
     >
+      {bookmarkIndex !== undefined && (
+        <span className="absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+          {bookmarkIndex + 1}
+        </span>
+      )}
       <BulkEditSelectionOverlay bookmark={bookmark} />
       <OwnerIndicator bookmark={bookmark} />
       <DragHandle
@@ -404,6 +409,11 @@ function GridView({
       )}
       data-bookmark-index={bookmarkIndex}
     >
+      {bookmarkIndex !== undefined && (
+        <span className="absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+          {bookmarkIndex + 1}
+        </span>
+      )}
       <BulkEditSelectionOverlay bookmark={bookmark} />
       <OwnerIndicator bookmark={bookmark} />
       <DragHandle bookmark={bookmark} className="left-2 top-2" />
@@ -459,6 +469,11 @@ function CompactView({
       )}
       data-bookmark-index={bookmarkIndex}
     >
+      {bookmarkIndex !== undefined && (
+        <span className="absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+          {bookmarkIndex + 1}
+        </span>
+      )}
       <BulkEditSelectionOverlay bookmark={bookmark} />
       <OwnerIndicator bookmark={bookmark} />
       <div className="flex h-full justify-between gap-2 overflow-hidden p-2">
