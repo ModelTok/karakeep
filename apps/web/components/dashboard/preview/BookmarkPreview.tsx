@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BookmarkTagsEditor } from "@/components/dashboard/bookmarks/BookmarkTagsEditor";
@@ -16,6 +16,7 @@ import {
 import { useSession } from "@/lib/auth/client";
 import useRelativeTime from "@/lib/hooks/relative-time";
 import { useTranslation } from "@/lib/i18n/client";
+import { useKeyboardNavigationStore } from "@/lib/store/useKeyboardNavigationStore";
 import { useQuery } from "@tanstack/react-query";
 import {
   Building,
@@ -173,6 +174,17 @@ export default function BookmarkPreview({
       `/dashboard/preview/${id}?listQuery=${encodeURIComponent(listQueryParam!)}`,
     );
   };
+
+  const setIsPreviewModalOpen = useKeyboardNavigationStore(
+    (state) => state.setIsPreviewModalOpen,
+  );
+
+  useEffect(() => {
+    setIsPreviewModalOpen(true);
+    return () => {
+      setIsPreviewModalOpen(false);
+    };
+  }, [setIsPreviewModalOpen]);
 
   useHotkeys(
     "j",

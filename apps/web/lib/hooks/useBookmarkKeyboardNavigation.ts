@@ -620,8 +620,12 @@ export function useBookmarkKeyboardNavigation({
   const shortcutsDialogOpen = useKeyboardNavigationStore(
     (state) => state.shortcutsDialogOpen,
   );
+  const isPreviewModalOpen = useKeyboardNavigationStore(
+    (state) => state.isPreviewModalOpen,
+  );
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const disabled = shortcutsDialogOpen || deleteDialogOpen;
+  const disabled =
+    shortcutsDialogOpen || deleteDialogOpen || isPreviewModalOpen;
   const hasBookmarks = bookmarks.length > 0;
   const canMutateBookmark = useBookmarkOwnership();
   const bulkActionsStore = useBulkActionsStore();
