@@ -4,6 +4,7 @@ import * as path from "path";
 import { execa } from "execa";
 
 import logger from "@karakeep/shared/logger";
+import { escapeHtml } from "@karakeep/shared/utils/htmlUtils";
 
 const YOUTUBE_URL_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/)/;
 const MAX_TRANSCRIPT_CHARS = 20000;
@@ -14,6 +15,26 @@ const INDEX_RE = /^\d+$/;
 
 export function isYoutubeVideoUrl(url: string): boolean {
   return YOUTUBE_URL_RE.test(url);
+}
+
+/**
+ * Wraps a transcript in a paragraph tag with its contents HTML-escaped, so
+ * it's safe to concatenate directly into `readableContent.content`, which is
+ * later rendered client-side via `dangerouslySetInnerHTML` with no further
+ * sanitization pass.
+ *
+ * This is needed even though parseSrt() already strips inline `<...>` tags:
+ * it does so per caption line, with a regex, before joining lines with a
+ * space. A transcript file crafted by the video's own uploader (yt-dlp reads
+ * `--write-subs`, i.e. subtitles authored by whoever uploaded the video) can
+ * split a tag across two consecutive caption lines - e.g. one line ending in
+ * `<img src=x onerror=alert(1)` and the next starting with `>` - so neither
+ * line matches the per-line tag regex, but the tag becomes whole once the
+ * lines are joined. escapeHtml() renders any such surviving angle brackets
+ * (and other HTML metacharacters) inert regardless of how they got there.
+ */
+export function toSafeTranscriptHtml(transcript: string): string {
+  return `<p>${escapeHtml(transcript)}</p>`;
 }
 
 export function parseSrt(raw: string): string {

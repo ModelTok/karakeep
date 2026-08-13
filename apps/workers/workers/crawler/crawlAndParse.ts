@@ -52,7 +52,11 @@ import {
 import { crawlPage } from "./crawlPage";
 import { runParseSubprocess } from "./parseSubprocess";
 import { redactUrlCredentials, shouldRetryCrawlStatusCode } from "./utils";
-import { fetchYoutubeTranscript, isYoutubeVideoUrl } from "./youtubeTranscript";
+import {
+  fetchYoutubeTranscript,
+  isYoutubeVideoUrl,
+  toSafeTranscriptHtml,
+} from "./youtubeTranscript";
 
 const tracer = getTracer("@karakeep/workers");
 
@@ -356,7 +360,7 @@ export async function crawlAndParseUrl(
         if (transcript && readableContent) {
           readableContent = {
             ...readableContent,
-            content: `${readableContent.content}\n\n${transcript}`,
+            content: `${readableContent.content}\n\n${toSafeTranscriptHtml(transcript)}`,
           };
           logger.info(
             `[Crawler][${jobId}] Injected YouTube transcript (${transcript.length} chars) into readable content.`,
