@@ -44,10 +44,18 @@ export async function fetchYoutubeTranscript(
   url: string,
   jobId: string,
 ): Promise<string | null> {
-  await fs.mkdir(TMP_FOLDER, { recursive: true });
   const outputTemplate = path.join(TMP_FOLDER, jobId);
+  let transcript: string | null = null;
 
+  // Everything from mkdir through parseSrt is one guarded sequence: a
+  // missing/unreadable transcript (no captions, yt-dlp failure mid-way,
+  // fs errors) is a normal crawl outcome, never allowed to throw out of
+  // this function. Whatever yt-dlp wrote to TMP_FOLDER for this jobId -
+  // even a partial result left behind by a failure part-way through
+  // (e.g. one language's .srt written before a later error) - is always
+  // cleaned up in the finally below, regardless of where things failed.
   try {
+    await fs.mkdir(TMP_FOLDER, { recursive: true });
     await execa("yt-dlp", [
       "--skip-download",
       "--write-auto-subs",
@@ -60,53 +68,42 @@ export async function fetchYoutubeTranscript(
       outputTemplate,
       url,
     ]);
+
+    const files = await fs.readdir(TMP_FOLDER);
+    const srtFile =
+      files.find((f) => f.startsWith(jobId) && f.endsWith(".pl.srt")) ??
+      files.find((f) => f.startsWith(jobId) && f.endsWith(".srt"));
+
+    if (srtFile) {
+      const raw = await fs.readFile(path.join(TMP_FOLDER, srtFile), "utf8");
+      transcript = parseSrt(raw);
+    }
   } catch (e) {
     logger.info(
       `[Crawler][${jobId}] yt-dlp subtitle fetch failed for "${url}": ${
         e instanceof Error ? e.message : String(e)
       }`,
     );
-    return null;
-  }
-
-  // Anything from here on (listing/reading/parsing the subtitle files) must
-  // never let an exception escape this function - a missing/unreadable
-  // transcript is a normal outcome for the crawl, not a fatal error - and
-  // whatever yt-dlp wrote to TMP_FOLDER for this jobId must always be
-  // cleaned up, on every exit path.
-  let cleanupFiles: string[] = [];
-  try {
-    const files = await fs.readdir(TMP_FOLDER);
-    cleanupFiles = files.filter((f) => f.startsWith(jobId));
-    const srtFile =
-      files.find((f) => f.startsWith(jobId) && f.endsWith(".pl.srt")) ??
-      files.find((f) => f.startsWith(jobId) && f.endsWith(".srt"));
-
-    if (!srtFile) {
-      return null;
-    }
-
-    const fullPath = path.join(TMP_FOLDER, srtFile);
-    const raw = await fs.readFile(fullPath, "utf8");
-    return parseSrt(raw);
-  } catch (e) {
-    logger.info(
-      `[Crawler][${jobId}] Failed to read yt-dlp subtitle output for "${url}": ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    );
-    return null;
   } finally {
-    await Promise.all(
-      cleanupFiles.map((f) =>
-        fs.rm(path.join(TMP_FOLDER, f)).catch((e) => {
-          logger.info(
-            `[Crawler][${jobId}] Failed to clean up temp yt-dlp file "${f}": ${
-              e instanceof Error ? e.message : String(e)
-            }`,
-          );
-        }),
-      ),
-    );
+    try {
+      const files = await fs.readdir(TMP_FOLDER);
+      const cleanupFiles = files.filter((f) => f.startsWith(jobId));
+      await Promise.all(
+        cleanupFiles.map((f) =>
+          fs.rm(path.join(TMP_FOLDER, f)).catch((e) => {
+            logger.info(
+              `[Crawler][${jobId}] Failed to clean up temp yt-dlp file "${f}": ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            );
+          }),
+        ),
+      );
+    } catch {
+      // TMP_FOLDER missing/unreadable (e.g. mkdir itself failed) - nothing
+      // to clean up.
+    }
   }
+
+  return transcript;
 }
