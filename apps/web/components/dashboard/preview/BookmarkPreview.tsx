@@ -169,8 +169,13 @@ export default function BookmarkPreview({
       ? bookmarkIds[currentIndex + 1]
       : null;
 
+  // Used only by the j/k hotkeys below to step through the list without
+  // growing browser history: the preview modal is closed via router.back()
+  // (see app/dashboard/@modal/(.)preview/[bookmarkId]/page.tsx), so a push
+  // per keystroke would make Escape/back step through each visited
+  // bookmark instead of returning straight to the list.
   const navigateTo = (id: string) => {
-    router.push(
+    router.replace(
       `/dashboard/preview/${id}?listQuery=${encodeURIComponent(listQueryParam!)}`,
     );
   };
