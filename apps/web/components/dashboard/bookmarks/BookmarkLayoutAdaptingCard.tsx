@@ -333,7 +333,7 @@ function ListView({
       data-bookmark-index={bookmarkIndex}
     >
       {bookmarkIndex !== undefined && (
-        <span className="absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+        <span className="pointer-events-none absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
           {bookmarkIndex + 1}
         </span>
       )}
@@ -410,7 +410,7 @@ function GridView({
       data-bookmark-index={bookmarkIndex}
     >
       {bookmarkIndex !== undefined && (
-        <span className="absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+        <span className="pointer-events-none absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
           {bookmarkIndex + 1}
         </span>
       )}
@@ -470,13 +470,13 @@ function CompactView({
       data-bookmark-index={bookmarkIndex}
     >
       {bookmarkIndex !== undefined && (
-        <span className="absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+        <span className="pointer-events-none absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
           {bookmarkIndex + 1}
         </span>
       )}
       <BulkEditSelectionOverlay bookmark={bookmark} />
       <OwnerIndicator bookmark={bookmark} />
-      <div className="flex h-full justify-between gap-2 overflow-hidden p-2">
+      <div className="flex h-full justify-between gap-2 overflow-hidden py-2 pl-8 pr-2">
         <div className="flex items-center gap-2">
           {bookmark.content.type === BookmarkTypes.LINK &&
             bookmark.content.favicon && (
