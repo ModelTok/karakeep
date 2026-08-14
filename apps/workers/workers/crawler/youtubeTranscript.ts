@@ -18,23 +18,30 @@ export function isYoutubeVideoUrl(url: string): boolean {
 }
 
 /**
- * Wraps a transcript in a paragraph tag with its contents HTML-escaped, so
- * it's safe to concatenate directly into `readableContent.content`, which is
- * later rendered client-side via `dangerouslySetInnerHTML` with no further
- * sanitization pass.
+ * Wraps a transcript in a collapsible <details>/<summary> block (native,
+ * no JS) with its contents HTML-escaped, so it's safe to concatenate
+ * directly into `readableContent.content`, which is later rendered
+ * client-side via `dangerouslySetInnerHTML` with no further sanitization
+ * pass.
  *
- * This is needed even though parseSrt() already strips inline `<...>` tags:
- * it does so per caption line, with a regex, before joining lines with a
- * space. A transcript file crafted by the video's own uploader (yt-dlp reads
- * `--write-subs`, i.e. subtitles authored by whoever uploaded the video) can
- * split a tag across two consecutive caption lines - e.g. one line ending in
- * `<img src=x onerror=alert(1)` and the next starting with `>` - so neither
- * line matches the per-line tag regex, but the tag becomes whole once the
- * lines are joined. escapeHtml() renders any such surviving angle brackets
- * (and other HTML metacharacters) inert regardless of how they got there.
+ * Escaping is needed even though parseSrt() already strips inline `<...>`
+ * tags: it does so per caption line, with a regex, before joining lines with
+ * a space. A transcript file crafted by the video's own uploader (yt-dlp
+ * reads `--write-subs`, i.e. subtitles authored by whoever uploaded the
+ * video) can split a tag across two consecutive caption lines - e.g. one
+ * line ending in `<img src=x onerror=alert(1)` and the next starting with
+ * `>` - so neither line matches the per-line tag regex, but the tag becomes
+ * whole once the lines are joined. escapeHtml() renders any such surviving
+ * angle brackets (and other HTML metacharacters) inert regardless of how
+ * they got there.
  */
 export function toSafeTranscriptHtml(transcript: string): string {
-  return `<p>${escapeHtml(transcript)}</p>`;
+  return (
+    `<details style="margin-top:1.5em;border:1px solid rgba(128,128,128,0.35);border-radius:6px;padding:0.5em 0.75em;">` +
+    `<summary style="cursor:pointer;font-weight:600;">Transkrypcja YouTube</summary>` +
+    `<p style="margin-top:0.75em;">${escapeHtml(transcript)}</p>` +
+    `</details>`
+  );
 }
 
 export function parseSrt(raw: string): string {

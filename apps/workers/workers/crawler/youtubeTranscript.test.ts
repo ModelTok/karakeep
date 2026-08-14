@@ -87,20 +87,26 @@ Different line.
 });
 
 describe("toSafeTranscriptHtml", () => {
+  const DETAILS_OPEN =
+    '<details style="margin-top:1.5em;border:1px solid rgba(128,128,128,0.35);border-radius:6px;padding:0.5em 0.75em;"><summary style="cursor:pointer;font-weight:600;">Transkrypcja YouTube</summary>';
+  const DETAILS_CLOSE = "</details>";
+
   test("escapes HTML metacharacters so a split-tag payload can't execute", () => {
     const maliciousTranscript = "<img src=x onerror=alert(1) >";
     expect(toSafeTranscriptHtml(maliciousTranscript)).toBe(
-      "<p>&lt;img src=x onerror=alert(1) &gt;</p>",
+      `${DETAILS_OPEN}<p style="margin-top:0.75em;">&lt;img src=x onerror=alert(1) &gt;</p>${DETAILS_CLOSE}`,
     );
   });
 
   test("escapes ampersands and quotes as well as angle brackets", () => {
     expect(toSafeTranscriptHtml(`Tom & Jerry's "great" show`)).toBe(
-      "<p>Tom &amp; Jerry&#x27;s &quot;great&quot; show</p>",
+      `${DETAILS_OPEN}<p style="margin-top:0.75em;">Tom &amp; Jerry&#x27;s &quot;great&quot; show</p>${DETAILS_CLOSE}`,
     );
   });
 
-  test("wraps plain transcripts in a paragraph tag unchanged otherwise", () => {
-    expect(toSafeTranscriptHtml("Hello there.")).toBe("<p>Hello there.</p>");
+  test("wraps plain transcripts in a collapsible details/summary block unchanged otherwise", () => {
+    expect(toSafeTranscriptHtml("Hello there.")).toBe(
+      `${DETAILS_OPEN}<p style="margin-top:0.75em;">Hello there.</p>${DETAILS_CLOSE}`,
+    );
   });
 });
