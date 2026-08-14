@@ -1,13 +1,22 @@
+import OpenAI, { APIConnectionError } from "openai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { OpenAIInferenceClient } from "./inference";
 import type { OpenAIInferenceConfig } from "./inference";
+import { QueueRetryAfterError } from "./queueing";
 
 const capturedBodies: Record<string, unknown>[] = [];
 const tagSchema = z.object({ tags: z.array(z.string()) });
 
 vi.mock("openai", () => {
+  class MockAPIConnectionError extends Error {
+    constructor({ message }: { message?: string; cause?: Error } = {}) {
+      super(message);
+      this.name = "APIConnectionError";
+    }
+  }
+
   const OpenAIMock = vi.fn().mockImplementation(() => ({
     chat: {
       completions: {
@@ -22,7 +31,7 @@ vi.mock("openai", () => {
     },
   }));
 
-  return { default: OpenAIMock };
+  return { default: OpenAIMock, APIConnectionError: MockAPIConnectionError };
 });
 
 vi.mock("openai/helpers/zod", () => ({
@@ -90,5 +99,51 @@ describe("OpenAIInferenceClient response_format", () => {
       type: "json_schema",
       json_schema: { name: "schema" },
     });
+  });
+});
+
+describe("OpenAIInferenceClient connection failure handling", () => {
+  it("converts a connection error into a QueueRetryAfterError instead of failing the job", async () => {
+    vi.mocked(OpenAI).mockImplementationOnce(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: vi
+                .fn()
+                .mockRejectedValueOnce(
+                  new APIConnectionError({ message: "connect ECONNREFUSED" }),
+                ),
+            },
+          },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+    );
+    const client = new OpenAIInferenceClient(makeConfig("json"));
+
+    await expect(
+      client.inferFromText("summarize this text", { schema: null }),
+    ).rejects.toBeInstanceOf(QueueRetryAfterError);
+  });
+
+  it("does not convert other API errors (e.g. bad requests) into retry-later", async () => {
+    vi.mocked(OpenAI).mockImplementationOnce(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: vi
+                .fn()
+                .mockRejectedValueOnce(new Error("400 invalid request")),
+            },
+          },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+    );
+    const client = new OpenAIInferenceClient(makeConfig("json"));
+
+    await expect(
+      client.inferFromText("summarize this text", { schema: null }),
+    ).rejects.not.toBeInstanceOf(QueueRetryAfterError);
   });
 });

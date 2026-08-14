@@ -1,5 +1,5 @@
 import { Ollama } from "ollama";
-import OpenAI from "openai";
+import OpenAI, { APIConnectionError } from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import * as undici from "undici";
 import { z } from "zod";
@@ -7,6 +7,33 @@ import { z } from "zod";
 import serverConfig from "./config";
 import { customFetch } from "./customFetch";
 import logger from "./logger";
+import { QueueRetryAfterError } from "./queueing";
+
+// If the OpenAI-compatible endpoint (typically local Ollama) is simply
+// unreachable - not a real API error like a bad request or rate limit -
+// don't burn one of the job's limited retry attempts and permanently mark
+// it "failed". Ollama commonly runs on a schedule (started/stopped by cron
+// to save power) rather than continuously, so a connection failure often
+// just means "try again once it's back up". Retried without a delay cap:
+// if Ollama is broken for good rather than merely off-schedule, the job
+// waits indefinitely instead of failing - an accepted trade-off for a
+// personal, single-user deployment where a stuck "pending" job is visible
+// in the UI rather than silently discarded.
+const OLLAMA_UNREACHABLE_RETRY_DELAY_MS = 15 * 60 * 1000;
+
+async function retryOnOllamaUnreachable<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof APIConnectionError) {
+      throw new QueueRetryAfterError(
+        `Inference endpoint unreachable, will retry: ${e.message}`,
+        OLLAMA_UNREACHABLE_RETRY_DELAY_MS,
+      );
+    }
+    throw e;
+  }
+}
 
 export interface InferenceResponse {
   response: string;
@@ -296,25 +323,27 @@ export class OpenAIInferenceClient implements InferenceClient {
       ...defaultInferenceOptions,
       ..._opts,
     };
-    const chatCompletion = await this.openAI.chat.completions.create(
-      {
-        messages: [{ role: "user", content: prompt }],
-        model: this.config.textModel,
-        ...(this.config.serviceTier
-          ? { service_tier: this.config.serviceTier }
-          : {}),
-        ...(this.config.useMaxCompletionTokens
-          ? { max_completion_tokens: this.config.maxOutputTokens }
-          : { max_tokens: this.config.maxOutputTokens }),
-        response_format: mapOpenAIResponseFormat(
-          optsWithDefaults.schema,
-          this.config.outputSchema,
-        ),
-        reasoning_effort: this.config.reasoningEffort,
-      },
-      {
-        signal: optsWithDefaults.abortSignal,
-      },
+    const chatCompletion = await retryOnOllamaUnreachable(() =>
+      this.openAI.chat.completions.create(
+        {
+          messages: [{ role: "user", content: prompt }],
+          model: this.config.textModel,
+          ...(this.config.serviceTier
+            ? { service_tier: this.config.serviceTier }
+            : {}),
+          ...(this.config.useMaxCompletionTokens
+            ? { max_completion_tokens: this.config.maxOutputTokens }
+            : { max_tokens: this.config.maxOutputTokens }),
+          response_format: mapOpenAIResponseFormat(
+            optsWithDefaults.schema,
+            this.config.outputSchema,
+          ),
+          reasoning_effort: this.config.reasoningEffort,
+        },
+        {
+          signal: optsWithDefaults.abortSignal,
+        },
+      ),
     );
 
     const response = chatCompletion.choices[0].message.content;
@@ -334,38 +363,40 @@ export class OpenAIInferenceClient implements InferenceClient {
       ...defaultInferenceOptions,
       ..._opts,
     };
-    const chatCompletion = await this.openAI.chat.completions.create(
-      {
-        model: this.config.imageModel,
-        ...(this.config.serviceTier
-          ? { service_tier: this.config.serviceTier }
-          : {}),
-        ...(this.config.useMaxCompletionTokens
-          ? { max_completion_tokens: this.config.maxOutputTokens }
-          : { max_tokens: this.config.maxOutputTokens }),
-        response_format: mapOpenAIResponseFormat(
-          optsWithDefaults.schema,
-          this.config.outputSchema,
-        ),
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: prompt },
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:${contentType};base64,${image}`,
-                  detail: "low",
+    const chatCompletion = await retryOnOllamaUnreachable(() =>
+      this.openAI.chat.completions.create(
+        {
+          model: this.config.imageModel,
+          ...(this.config.serviceTier
+            ? { service_tier: this.config.serviceTier }
+            : {}),
+          ...(this.config.useMaxCompletionTokens
+            ? { max_completion_tokens: this.config.maxOutputTokens }
+            : { max_tokens: this.config.maxOutputTokens }),
+          response_format: mapOpenAIResponseFormat(
+            optsWithDefaults.schema,
+            this.config.outputSchema,
+          ),
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${contentType};base64,${image}`,
+                    detail: "low",
+                  },
                 },
-              },
-            ],
-          },
-        ],
-      },
-      {
-        signal: optsWithDefaults.abortSignal,
-      },
+              ],
+            },
+          ],
+        },
+        {
+          signal: optsWithDefaults.abortSignal,
+        },
+      ),
     );
 
     const response = chatCompletion.choices[0].message.content;
