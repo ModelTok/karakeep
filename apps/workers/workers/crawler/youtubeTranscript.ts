@@ -84,18 +84,33 @@ export async function fetchYoutubeTranscript(
   // cleaned up in the finally below, regardless of where things failed.
   try {
     await fs.mkdir(TMP_FOLDER, { recursive: true });
-    await execa("yt-dlp", [
-      "--skip-download",
-      "--write-auto-subs",
-      "--write-subs",
-      "--sub-langs",
-      "pl,en",
-      "--sub-format",
-      "srt",
-      "-o",
-      outputTemplate,
-      url,
-    ]);
+
+    try {
+      await execa("yt-dlp", [
+        "--skip-download",
+        "--write-auto-subs",
+        "--write-subs",
+        "--sub-langs",
+        "pl,en",
+        "--sub-format",
+        "srt",
+        "-o",
+        outputTemplate,
+        url,
+      ]);
+    } catch (e) {
+      // yt-dlp requests both languages in one invocation and exits non-zero
+      // if EITHER fails (e.g. YouTube rate-limits or lacks captions for one
+      // language) even when the other was already written to disk
+      // successfully. Don't give up here - fall through to check
+      // TMP_FOLDER for whatever did land before treating this as a total
+      // failure.
+      logger.info(
+        `[Crawler][${jobId}] yt-dlp exited non-zero for "${url}" (checking for a partially-written transcript before giving up): ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
 
     const files = await fs.readdir(TMP_FOLDER);
     const srtFile =
@@ -108,7 +123,7 @@ export async function fetchYoutubeTranscript(
     }
   } catch (e) {
     logger.info(
-      `[Crawler][${jobId}] yt-dlp subtitle fetch failed for "${url}": ${
+      `[Crawler][${jobId}] Unexpected error fetching YouTube transcript for "${url}": ${
         e instanceof Error ? e.message : String(e)
       }`,
     );

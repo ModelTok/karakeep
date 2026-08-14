@@ -1,10 +1,20 @@
-import { describe, expect, test } from "vitest";
+import * as fs from "node:fs/promises";
+import * as os from "os";
+import * as path from "path";
+import { execa } from "execa";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
+  fetchYoutubeTranscript,
   isYoutubeVideoUrl,
   parseSrt,
   toSafeTranscriptHtml,
 } from "./youtubeTranscript";
+
+vi.mock("execa", () => ({ execa: vi.fn() }));
+
+const mockedExeca = execa as unknown as ReturnType<typeof vi.fn>;
+const TMP_FOLDER = path.join(os.tmpdir(), "yt_transcripts");
 
 describe("isYoutubeVideoUrl", () => {
   test("matches youtube.com watch URLs", () => {
@@ -108,5 +118,66 @@ describe("toSafeTranscriptHtml", () => {
     expect(toSafeTranscriptHtml("Hello there.")).toBe(
       `${DETAILS_OPEN}<p style="margin-top:0.75em;">Hello there.</p>${DETAILS_CLOSE}`,
     );
+  });
+});
+
+describe("fetchYoutubeTranscript", () => {
+  afterEach(async () => {
+    await fs.rm(TMP_FOLDER, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  test("recovers a partial transcript when yt-dlp exits non-zero after writing one language's subtitles", async () => {
+    // Reproduces a real production failure: yt-dlp requests pl+en in one
+    // call, pl is written successfully, en then hits YouTube's rate limit
+    // (HTTP 429) and the whole process exits non-zero - even though a
+    // usable transcript was already on disk.
+    const jobId = "test-job-partial";
+    mockedExeca.mockImplementation(async () => {
+      await fs.mkdir(TMP_FOLDER, { recursive: true });
+      await fs.writeFile(
+        path.join(TMP_FOLDER, `${jobId}.pl.srt`),
+        "1\n00:00:00,000 --> 00:00:02,000\nCzesc swiat.\n",
+      );
+      throw new Error(
+        "Command failed with exit code 1: ... HTTP Error 429: Too Many Requests",
+      );
+    });
+
+    const transcript = await fetchYoutubeTranscript(
+      "https://youtu.be/abc123",
+      jobId,
+    );
+
+    expect(transcript).toBe("Czesc swiat.");
+  });
+
+  test("returns null when yt-dlp fails with no subtitle files written at all", async () => {
+    const jobId = "test-job-total-failure";
+    mockedExeca.mockRejectedValue(new Error("network error"));
+
+    const transcript = await fetchYoutubeTranscript(
+      "https://youtu.be/abc123",
+      jobId,
+    );
+
+    expect(transcript).toBeNull();
+  });
+
+  test("cleans up every temp file for the job after a partial-recovery success", async () => {
+    const jobId = "test-job-cleanup";
+    mockedExeca.mockImplementation(async () => {
+      await fs.mkdir(TMP_FOLDER, { recursive: true });
+      await fs.writeFile(
+        path.join(TMP_FOLDER, `${jobId}.pl.srt`),
+        "1\n00:00:00,000 --> 00:00:02,000\nCzesc swiat.\n",
+      );
+      throw new Error("Command failed with exit code 1");
+    });
+
+    await fetchYoutubeTranscript("https://youtu.be/abc123", jobId);
+
+    const remaining = await fs.readdir(TMP_FOLDER).catch(() => []);
+    expect(remaining.filter((f) => f.startsWith(jobId))).toEqual([]);
   });
 });
