@@ -3,11 +3,11 @@ import * as os from "os";
 import * as path from "path";
 import { execa } from "execa";
 
+import serverConfig from "@karakeep/shared/config";
 import logger from "@karakeep/shared/logger";
 import { escapeHtml } from "@karakeep/shared/utils/htmlUtils";
 
 const YOUTUBE_URL_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/)/;
-const MAX_TRANSCRIPT_CHARS = 20000;
 const TMP_FOLDER = path.join(os.tmpdir(), "yt_transcripts");
 
 const TIMESTAMP_RE = /^\d{2}:\d{2}:\d{2},\d{3} --> /;
@@ -44,7 +44,10 @@ export function toSafeTranscriptHtml(transcript: string): string {
   );
 }
 
-export function parseSrt(raw: string): string {
+export function parseSrt(
+  raw: string,
+  maxChars: number = serverConfig.crawler.ytTranscriptMaxChars,
+): string {
   const lines: string[] = [];
   let prev: string | null = null;
   for (let line of raw.split("\n")) {
@@ -59,7 +62,7 @@ export function parseSrt(raw: string): string {
     lines.push(line);
     prev = line;
   }
-  return lines.join(" ").slice(0, MAX_TRANSCRIPT_CHARS);
+  return lines.join(" ").slice(0, maxChars);
 }
 
 /**

@@ -148,6 +148,7 @@ const allEnv = z.object({
     .string()
     .prefault("")
     .transform((t) => t.split("%%").filter((a) => a)),
+  CRAWLER_YT_TRANSCRIPT_MAX_CHARS: z.coerce.number().default(20000),
   CRAWLER_MONOLITH_TIMEOUT_SEC: z.coerce.number().default(5),
   CRAWLER_MONOLITH_ARGS: z
     .string()
@@ -414,6 +415,7 @@ const serverConfigSchema = allEnv.transform((val, ctx) => {
       enableAdblocker: val.CRAWLER_ENABLE_ADBLOCKER,
       enableAutoconsent: val.CRAWLER_ENABLE_AUTOCONSENT,
       ytDlpArguments: val.CRAWLER_YTDLP_ARGS,
+      ytTranscriptMaxChars: val.CRAWLER_YT_TRANSCRIPT_MAX_CHARS,
       monolithTimeoutSec: val.CRAWLER_MONOLITH_TIMEOUT_SEC,
       monolithArguments: val.CRAWLER_MONOLITH_ARGS,
       parserMemLimitMb: val.CRAWLER_PARSER_MEM_LIMIT_MB,
