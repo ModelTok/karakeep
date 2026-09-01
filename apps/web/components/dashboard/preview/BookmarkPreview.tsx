@@ -208,6 +208,27 @@ export default function BookmarkPreview({
     [prevId],
   );
 
+  // Alt+j / Alt+k step through the list even while the note editor (or any
+  // other form control) has focus: react-hotkeys-hook disables plain j/k on
+  // form tags by default so typing a note isn't hijacked, but the Alt
+  // modifier can't be typed as note text, so these are safe to enable there.
+  useHotkeys(
+    "alt+j",
+    () => {
+      if (nextId) navigateTo(nextId);
+    },
+    { enabled: !!nextId, preventDefault: true, enableOnFormTags: true },
+    [nextId],
+  );
+  useHotkeys(
+    "alt+k",
+    () => {
+      if (prevId) navigateTo(prevId);
+    },
+    { enabled: !!prevId, preventDefault: true, enableOnFormTags: true },
+    [prevId],
+  );
+
   const { data: bookmark } = useQuery(
     api.bookmarks.getBookmark.queryOptions(
       {
