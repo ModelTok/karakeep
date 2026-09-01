@@ -40,6 +40,7 @@ import {
 } from "@karakeep/shared/utils/bookmarkUtils";
 
 import SummarizeBookmarkArea from "../bookmarks/SummarizeBookmarkArea";
+import DeleteBookmarkConfirmationDialog from "../bookmarks/DeleteBookmarkConfirmationDialog";
 import ActionBar from "./ActionBar";
 import { AssetContentSection } from "./AssetContentSection";
 import AttachmentBox from "./AttachmentBox";
@@ -277,12 +278,24 @@ export default function BookmarkPreview({
     ),
   );
 
+  // Check if the current user owns this bookmark
+  const isOwner = bookmark ? session?.user?.id === bookmark.userId : false;
+
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+
+  // Delete/Backspace opens the delete confirmation dialog. Plain Delete is
+  // intentionally NOT enabled on form tags: while the note editor is
+  // focused, Delete edits the note text instead of deleting the bookmark.
+  useHotkeys(
+    "delete,backspace",
+    () => setDeleteDialogOpen(true),
+    { enabled: isOwner && !deleteDialogOpen, preventDefault: true },
+    [isOwner, deleteDialogOpen],
+  );
+
   if (!bookmark) {
     return <FullPageSpinner />;
   }
-
-  // Check if the current user owns this bookmark
-  const isOwner = session?.user?.id === bookmark.userId;
 
   let content;
   switch (bookmark.content.type) {
@@ -349,7 +362,12 @@ export default function BookmarkPreview({
       <HighlightsBox bookmarkId={bookmark.id} readOnly={!isOwner} />
       <Separator />
       <div className="flex items-center justify-between gap-2">
-        {isOwner && <ActionBar bookmark={bookmark} />}
+        {isOwner && (
+          <ActionBar
+            bookmark={bookmark}
+            setDeleteDialogOpen={setDeleteDialogOpen}
+          />
+        )}
         {hasListContext && (
           <span className="text-sm text-muted-foreground">
             {currentIndex + 1}/{bookmarkIds.length}
@@ -361,6 +379,15 @@ export default function BookmarkPreview({
 
   return (
     <>
+      {/* Rendered at the root (not in the collapsible sidebar) so the
+          confirmation dialog stays reachable even with the sidebar hidden. */}
+      {isOwner && (
+        <DeleteBookmarkConfirmationDialog
+          bookmark={bookmark}
+          open={deleteDialogOpen}
+          setOpen={setDeleteDialogOpen}
+        />
+      )}
       {/* Render original layout for wide screens */}
       <div className="hidden h-full flex-col overflow-hidden bg-background lg:flex">
         <div className="flex min-h-0 flex-1">

@@ -13,15 +13,18 @@ import { ListChecks, Pencil, Trash2 } from "lucide-react";
 import type { ZBookmark } from "@karakeep/shared/types/bookmarks";
 import { useUpdateBookmark } from "@karakeep/shared-react/hooks/bookmarks";
 
-import DeleteBookmarkConfirmationDialog from "../bookmarks/DeleteBookmarkConfirmationDialog";
 import { EditBookmarkDialog } from "../bookmarks/EditBookmarkDialog";
 import { useManageListsModal } from "../bookmarks/ManageListsModal";
 import { ArchivedActionIcon, FavouritedActionIcon } from "../bookmarks/icons";
 
-export default function ActionBar({ bookmark }: { bookmark: ZBookmark }) {
+export default function ActionBar({
+  bookmark,
+  setDeleteDialogOpen,
+}: {
+  bookmark: ZBookmark;
+  setDeleteDialogOpen: (open: boolean) => void;
+}) {
   const { t } = useTranslation();
-  const [deleteBookmarkDialogOpen, setDeleteBookmarkDialogOpen] =
-    useState(false);
 
   const [isEditBookmarkDialogOpen, setEditBookmarkDialogOpen] = useState(false);
 
@@ -146,17 +149,12 @@ export default function ActionBar({ bookmark }: { bookmark: ZBookmark }) {
         </TooltipContent>
       </Tooltip>
       <Tooltip delayDuration={0}>
-        <DeleteBookmarkConfirmationDialog
-          bookmark={bookmark}
-          open={deleteBookmarkDialogOpen}
-          setOpen={setDeleteBookmarkDialogOpen}
-        />
         <TooltipTrigger asChild>
           <Button
             className="size-8 rounded-md"
             variant="ghost"
             size="none"
-            onClick={() => setDeleteBookmarkDialogOpen(true)}
+            onClick={() => setDeleteDialogOpen(true)}
           >
             <Trash2 size={18} strokeWidth={1.5} />
           </Button>
