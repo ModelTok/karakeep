@@ -154,14 +154,13 @@ export default function BookmarkPreview({
     }
   }
 
-  const { data: listData } = useQuery({
-    ...api.bookmarks.getBookmarks.queryOptions(listQuery ?? {}),
-    enabled: listQuery !== null,
-  });
+  const { data: listData } = useQuery(
+    api.bookmarks.getBookmarks.queryOptions(listQuery ?? {}),
+  );
 
   const bookmarkIds = listData?.bookmarks.map((b) => b.id) ?? [];
   const currentIndex = bookmarkIds.indexOf(bookmarkId);
-  const hasListContext = listQuery !== null && currentIndex !== -1;
+  const hasListContext = currentIndex !== -1;
   const prevId =
     hasListContext && currentIndex > 0 ? bookmarkIds[currentIndex - 1] : null;
   const nextId =
@@ -174,10 +173,16 @@ export default function BookmarkPreview({
   // (see app/dashboard/@modal/(.)preview/[bookmarkId]/page.tsx), so a push
   // per keystroke would make Escape/back step through each visited
   // bookmark instead of returning straight to the list.
+  //
+  // When the preview was opened without an explicit list context, the
+  // default bookmarks list (desc, first page) is used as a fallback so
+  // j/k still work; the fallback context is preserved on navigation (no
+  // listQuery param is added, the fallback is re-derived next render).
   const navigateTo = (id: string) => {
-    router.replace(
-      `/dashboard/preview/${id}?listQuery=${encodeURIComponent(listQueryParam!)}`,
-    );
+    const queryPart = listQueryParam
+      ? `?listQuery=${encodeURIComponent(listQueryParam)}`
+      : "";
+    router.replace(`/dashboard/preview/${id}${queryPart}`);
   };
 
   const setIsPreviewModalOpen = useKeyboardNavigationStore(
