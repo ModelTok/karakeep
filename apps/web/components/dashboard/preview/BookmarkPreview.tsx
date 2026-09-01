@@ -17,7 +17,7 @@ import { useSession } from "@/lib/auth/client";
 import useRelativeTime from "@/lib/hooks/relative-time";
 import { useTranslation } from "@/lib/i18n/client";
 import { useKeyboardNavigationStore } from "@/lib/store/useKeyboardNavigationStore";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   Building,
   CalendarDays,
@@ -154,11 +154,23 @@ export default function BookmarkPreview({
     }
   }
 
-  const { data: listData } = useQuery(
-    api.bookmarks.getBookmarks.queryOptions(listQuery ?? {}),
+  const {
+    data: listData,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery(
+    api.bookmarks.getBookmarks.infiniteQueryOptions(
+      { ...listQuery, useCursorV2: true },
+      {
+        initialCursor: null,
+        getNextPageParam: (lastPage) => lastPage.nextCursor,
+      },
+    ),
   );
 
-  const bookmarkIds = listData?.bookmarks.map((b) => b.id) ?? [];
+  const bookmarkIds =
+    listData?.pages.flatMap((page) => page.bookmarks.map((b) => b.id)) ?? [];
   const currentIndex = bookmarkIds.indexOf(bookmarkId);
   const hasListContext = currentIndex !== -1;
   const prevId =
@@ -167,6 +179,11 @@ export default function BookmarkPreview({
     hasListContext && currentIndex < bookmarkIds.length - 1
       ? bookmarkIds[currentIndex + 1]
       : null;
+  // j at the end of the loaded pages: pull the next page so the user can
+  // keep going with another j, instead of dead-ending at page size.
+  const atEndOfLoadedList =
+    hasListContext && currentIndex === bookmarkIds.length - 1;
+  const canLoadMore = atEndOfLoadedList && !!hasNextPage && !isFetchingNextPage;
 
   // Used only by the j/k hotkeys below to step through the list without
   // growing browser history: the preview modal is closed via router.back()
@@ -196,13 +213,19 @@ export default function BookmarkPreview({
     };
   }, [setIsPreviewModalOpen]);
 
+  const nextHandler = () => {
+    if (nextId) {
+      navigateTo(nextId);
+    } else if (canLoadMore) {
+      fetchNextPage();
+    }
+  };
+
   useHotkeys(
     "j",
-    () => {
-      if (nextId) navigateTo(nextId);
-    },
-    { enabled: !!nextId, preventDefault: true },
-    [nextId],
+    nextHandler,
+    { enabled: !!nextId || canLoadMore, preventDefault: true },
+    [nextId, canLoadMore],
   );
   useHotkeys(
     "k",
@@ -219,11 +242,13 @@ export default function BookmarkPreview({
   // modifier can't be typed as note text, so these are safe to enable there.
   useHotkeys(
     "alt+j",
-    () => {
-      if (nextId) navigateTo(nextId);
+    nextHandler,
+    {
+      enabled: !!nextId || canLoadMore,
+      preventDefault: true,
+      enableOnFormTags: true,
     },
-    { enabled: !!nextId, preventDefault: true, enableOnFormTags: true },
-    [nextId],
+    [nextId, canLoadMore],
   );
   useHotkeys(
     "alt+k",
