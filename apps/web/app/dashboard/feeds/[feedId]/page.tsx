@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import Bookmarks from "@/components/dashboard/bookmarks/Bookmarks";
+import { FeedDeleteHotkey } from "@/components/dashboard/feeds/FeedDeleteHotkey";
 import { api } from "@/server/api/client";
 import { TRPCError } from "@trpc/server";
 
@@ -20,11 +21,14 @@ export default async function FeedPage(props: {
   }
 
   return (
-    <Bookmarks
-      query={{ rssFeedId: feed.id }}
-      showDivider={true}
-      showEditorCard={false}
-      header={<div className="text-2xl">{feed.name}</div>}
-    />
+    <>
+      <Bookmarks
+        query={{ rssFeedId: feed.id }}
+        showDivider={true}
+        showEditorCard={false}
+        header={<div className="text-2xl">{feed.name}</div>}
+      />
+      <FeedDeleteHotkey feed={feed} />
+    </>
   );
 }
