@@ -1,1 +1,0 @@
-ALTER TABLE `user` ADD `digestEnabled` integer DEFAULT false NOT NULL;
