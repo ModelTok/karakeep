@@ -73,16 +73,9 @@ services:
     restart: unless-stopped
     volumes:
       - ollama:/root/.ollama
-    # ---- Optional NVIDIA GPU acceleration ----
-    # Requires nvidia-container-toolkit on the host. Uncomment to enable;
-    # without it, Ollama runs on CPU (slower but works — keep the generous timeout above).
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    # NVIDIA GPU acceleration — requires the nvidia container runtime (present on this host).
+    # Without this, Ollama runs on CPU (works, but much slower).
+    gpus: all
 
   whisper-asr:
     image: onerahmet/openai-whisper-asr-webservice:latest
