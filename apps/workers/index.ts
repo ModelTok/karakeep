@@ -6,6 +6,7 @@ import {
   AdminMaintenanceQueue,
   AssetPreprocessingQueue,
   BackupQueue,
+  DigestQueue,
   EmbeddingsQueue,
   FeedQueue,
   initEventLogger,
@@ -17,6 +18,7 @@ import {
   prepareQueue,
   RuleEngineQueue,
   SearchIndexingQueue,
+  TranscriptionQueue,
   shutdownEventLogger,
   shutdownTracing,
   startQueue,
@@ -33,6 +35,9 @@ let backupSchedulingWorker:
   | undefined;
 let feedRefreshingWorker:
   | typeof import("./workers/feedWorker").FeedRefreshingWorker
+  | undefined;
+let digestSchedulingWorker:
+  | typeof import("./workers/digestWorker").DigestSchedulingWorker
   | undefined;
 
 const workerBuilders = {
@@ -103,6 +108,21 @@ const workerBuilders = {
     await BackupQueue.ensureInit();
     return BackupWorker.build();
   },
+  transcription: async () => {
+    const { TranscriptionWorker } = await import(
+      "./workers/transcriptionWorker"
+    );
+    await TranscriptionQueue.ensureInit();
+    return TranscriptionWorker.build();
+  },
+  digest: async () => {
+    const { DigestSchedulingWorker, DigestWorker } = await import(
+      "./workers/digestWorker"
+    );
+    digestSchedulingWorker = DigestSchedulingWorker;
+    await DigestQueue.ensureInit();
+    return DigestWorker.build();
+  },
 } as const;
 
 async function buildImportWorker() {
@@ -152,6 +172,10 @@ async function main() {
     backupSchedulingWorker?.start();
   }
 
+  if (workers.some((w) => w.name === "digest")) {
+    digestSchedulingWorker?.start();
+  }
+
   // Start import polling worker
   let importWorker = null;
   let importWorkerPromise: Promise<void> | null = null;
@@ -182,6 +206,9 @@ async function main() {
   }
   if (workers.some((w) => w.name === "backup")) {
     backupSchedulingWorker?.stop();
+  }
+  if (workers.some((w) => w.name === "digest")) {
+    digestSchedulingWorker?.stop();
   }
   if (importWorker) {
     importWorker.stop();
