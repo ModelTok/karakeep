@@ -3,7 +3,7 @@ import * as Haptics from "expo-haptics";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useBookmarkListLayoutMenu } from "@/components/bookmarks/BookmarkListHeader";
 import UpdatingBookmarkList from "@/components/bookmarks/UpdatingBookmarkList";
-import FullPageError from "@/components/FullPageError";
+import QueryPageState from "@/components/QueryPageState";
 import FullPageSpinner from "@/components/ui/FullPageSpinner";
 import { useArchiveFilter } from "@/lib/hooks";
 import { useColorScheme } from "@/lib/useColorScheme";
@@ -39,9 +39,9 @@ export default function ListView() {
           ),
         }}
       />
-      {error ? (
-        <FullPageError error={error.message} onRetry={() => refetch()} />
-      ) : list && !isSettingsLoading ? (
+      {!list ? (
+        <QueryPageState error={error} onRetry={() => refetch()} />
+      ) : !isSettingsLoading ? (
         <UpdatingBookmarkList
           query={{
             listId: list.id,
@@ -118,7 +118,6 @@ function ListActionsMenu({
   return (
     <MenuView
       actions={[
-        ...layoutActions,
         {
           id: "edit",
           title: "Edit List",
@@ -146,6 +145,7 @@ function ListActionsMenu({
             ios: destructiveMenuIconColor,
           }),
         },
+        ...layoutActions,
         {
           id: "leave",
           title: "Leave List",

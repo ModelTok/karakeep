@@ -1,10 +1,12 @@
 import { adminCmd } from "@/commands/admin";
+import { assetsCmd } from "@/commands/assets";
 import { authCmd } from "@/commands/auth";
 import { bookmarkCmd } from "@/commands/bookmarks";
 import { dumpCmd } from "@/commands/dump";
 import { highlightsCmd } from "@/commands/highlights";
 import { listsCmd } from "@/commands/lists";
 import { migrateCmd } from "@/commands/migrate";
+import { skillCmd } from "@/commands/skill";
 import { tagsCmd } from "@/commands/tags";
 import { whoamiCmd } from "@/commands/whoami";
 import { wipeCmd } from "@/commands/wipe";
@@ -40,10 +42,13 @@ function resolveGlobalOptions(opts: RawGlobalOptions) {
   };
 }
 
-function isAuthCommand(command: { name(): string; parent?: unknown }) {
+function doesNotRequireAuthentication(command: {
+  name(): string;
+  parent?: unknown;
+}) {
   let current: { name(): string; parent?: unknown } | undefined = command;
   while (current) {
-    if (current.name() === "auth") {
+    if (current.name() === "auth" || current.name() === "skill") {
       return true;
     }
     current = current.parent as typeof current;
@@ -73,10 +78,12 @@ const program = new Command()
   );
 
 program.addCommand(adminCmd);
+program.addCommand(assetsCmd);
 program.addCommand(authCmd);
 program.addCommand(bookmarkCmd);
 program.addCommand(highlightsCmd);
 program.addCommand(listsCmd);
+program.addCommand(skillCmd);
 program.addCommand(tagsCmd);
 program.addCommand(whoamiCmd);
 program.addCommand(migrateCmd);
@@ -84,7 +91,7 @@ program.addCommand(wipeCmd);
 program.addCommand(dumpCmd);
 
 program.hook("preAction", (_thisCommand, actionCommand) => {
-  if (isAuthCommand(actionCommand)) {
+  if (doesNotRequireAuthentication(actionCommand)) {
     return;
   }
 

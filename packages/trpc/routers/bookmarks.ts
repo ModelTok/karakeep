@@ -26,21 +26,31 @@ import {
   OpenAIQueue,
   QueuePriority,
   QuotaService,
+  SUPPORTED_BOOKMARK_ASSET_TYPES,
   triggerSearchReindex,
 } from "@karakeep/shared-server";
-import { SUPPORTED_BOOKMARK_ASSET_TYPES } from "@karakeep/shared/assetdb";
 import serverConfig from "@karakeep/shared/config";
-import { InferenceClientFactory } from "@karakeep/shared/inference";
+import {
+  EmbeddingClientFactory,
+  InferenceClientFactory,
+} from "@karakeep/shared/inference";
+import logger from "@karakeep/shared/logger";
 import { buildSummaryPrompt } from "@karakeep/shared/prompts.server";
 import { EnqueueOptions } from "@karakeep/shared/queueing";
 import { getRateLimitClient } from "@karakeep/shared/ratelimiting";
 import { FilterQuery, getSearchClient } from "@karakeep/shared/search";
 import { parseSearchQuery } from "@karakeep/shared/searchQueryParser";
-import type { ZBookmarkContent } from "@karakeep/shared/types/bookmarks";
+import type {
+  ZBookmarkContent,
+  ZBookmarkSource,
+} from "@karakeep/shared/types/bookmarks";
 import {
   BookmarkTypes,
   DEFAULT_NUM_BOOKMARKS_PER_PAGE,
+  MAX_NUM_BOOKMARKS_PER_PAGE,
   zBookmarkSchema,
+  zBookmarkReadableContentFormatSchema,
+  zBookmarkReadableContentSchema,
   zGetBookmarksRequestSchema,
   zGetBookmarksResponseSchema,
   zManipulatedTagSchema,
@@ -52,6 +62,8 @@ import {
 import type { ZBookmarkTags } from "@karakeep/shared/types/tags";
 import { ANCHOR_TEXT_MAX_LENGTH } from "@karakeep/shared/utils/reading-progress-dom";
 import { normalizeTagName } from "@karakeep/shared/utils/tag";
+import { getVectorStoreClient } from "@karakeep/shared/vectorStore";
+import type { VectorFilterQuery } from "@karakeep/shared/vectorStore";
 import { bookmarkCreationCounter } from "../stats";
 
 import type { AuthedContext } from "../index";
@@ -64,11 +76,20 @@ import {
 } from "../index";
 import { RuleEngine } from "../lib/ruleEngine";
 import { getBookmarkIdsFromMatcher } from "../lib/search";
+import { reciprocalRankFusion } from "../lib/searchRanking";
 import { Asset } from "../models/assets";
 import { BareBookmark, Bookmark } from "../models/bookmarks";
 import { WebhooksService } from "../models/webhooks.service";
 
 const bookmarksProcedure = createScopedAuthedProcedure("bookmarks");
+const HYBRID_CANDIDATES_PER_SOURCE = MAX_NUM_BOOKMARKS_PER_PAGE;
+/**
+ * Vector search always returns as many hits as it's asked for, so without a
+ * floor an unrelated query still fills a whole page with noise. Vector stores
+ * normalize similarity into a 0..1 ranking score (for cosine distance that's
+ * `(1 + cosine) / 2`), so this drops anything below ~0.2 cosine similarity.
+ */
+const SEMANTIC_SCORE_THRESHOLD = 0.6;
 
 export const ensureBookmarkOwnership = experimental_trpcMiddleware<{
   ctx: AuthedContext;
@@ -124,6 +145,11 @@ async function attemptToDedupLink(ctx: AuthedContext, url: string) {
 }
 
 const BOOKMARKS_QUERIED_WINDOW_MS = 10 * 60 * 1000;
+const semanticSearchRateLimitConfig = {
+  name: "bookmarks.searchBookmarks.semantic",
+  windowMs: 60 * 1000,
+  maxRequests: 300,
+} as const;
 
 function createBookmarksQueriedMiddleware<T>() {
   return async function bookmarksQueriedMiddleware(opts: {
@@ -137,6 +163,28 @@ function createBookmarksQueriedMiddleware<T>() {
       { "user.id": opts.ctx.user.id },
     );
     return opts.next();
+  };
+}
+
+export function createSemanticSearchRateLimitMiddleware<T>() {
+  const rateLimitMiddleware = createRateLimitMiddleware<T>(
+    semanticSearchRateLimitConfig,
+  );
+  return function semanticSearchRateLimitMiddleware(opts: {
+    path: string;
+    ctx: {
+      req: { ip: string | null };
+      user: { id: string };
+    };
+    input: {
+      searchMode: "fts" | "semantic" | "hybrid";
+    };
+    next: () => Promise<T>;
+  }) {
+    if (opts.input.searchMode === "fts") {
+      return opts.next();
+    }
+    return rateLimitMiddleware(opts);
   };
 }
 
@@ -156,6 +204,14 @@ const highBookmarkCreationRateLimitConfig = {
   windowMs: 5 * 60 * 1000,
   maxRequests: 30,
 } as const;
+
+// Automated bulk flows rely on the dedup path for idempotency, so hitting an
+// existing bookmark from them must stay a no-op instead of unarchiving it and
+// bumping it to the top of the list.
+const RESAVE_EXEMPT_SOURCES: ReadonlySet<ZBookmarkSource> = new Set([
+  "rss",
+  "import",
+]);
 
 async function shouldUseLowPriorityQueues(
   ctx: AuthedContext,
@@ -223,14 +279,77 @@ export const bookmarksAppRouter = router({
             "bookmark.id": alreadyExists.id,
             "bookmark.already_existed": true,
           });
-          return { ...alreadyExists, alreadyExists: true };
+          if (input.source && RESAVE_EXEMPT_SOURCES.has(input.source)) {
+            return { ...alreadyExists, alreadyExists: true };
+          }
+          const now = new Date();
+          // Re-saving always restores the bookmark and bumps it back to the top
+          // of the list. The rest of the metadata is only overwritten when the
+          // caller actually supplied it, so a bare re-save doesn't wipe the
+          // title or the note that are already on the existing bookmark.
+          const resaved = {
+            createdAt: input.createdAt ?? now,
+            archived: input.archived ?? false,
+            ...(input.title !== undefined ? { title: input.title } : {}),
+            ...(input.favourited !== undefined
+              ? { favourited: input.favourited }
+              : {}),
+            ...(input.note !== undefined ? { note: input.note } : {}),
+            ...(input.summary !== undefined ? { summary: input.summary } : {}),
+          };
+          await ctx.db
+            .update(bookmarks)
+            .set({ ...resaved, modifiedAt: now })
+            .where(
+              and(
+                eq(bookmarks.userId, ctx.user.id),
+                eq(bookmarks.id, alreadyExists.id),
+              ),
+            );
+          await Promise.all([
+            triggerSearchReindex(alreadyExists.id, {
+              groupId: ctx.user.id,
+            }),
+            new WebhooksService(ctx.db).triggerWebhook(
+              alreadyExists.id,
+              "edited",
+              ctx.user.id,
+              {
+                groupId: ctx.user.id,
+              },
+            ),
+          ]);
+
+          return {
+            ...alreadyExists,
+            ...resaved,
+            modifiedAt: now,
+            alreadyExists: true,
+          };
+        }
+      }
+
+      if (input.type === BookmarkTypes.LINK && input.precrawledArchiveId) {
+        await Asset.ensureOwnership(ctx, input.precrawledArchiveId);
+      }
+      if (input.type === BookmarkTypes.ASSET) {
+        const uploadedAsset = await Asset.fromId(ctx, input.assetId);
+        uploadedAsset.ensureOwnership();
+        if (
+          !uploadedAsset.asset.contentType ||
+          !SUPPORTED_BOOKMARK_ASSET_TYPES.has(uploadedAsset.asset.contentType)
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Unsupported asset type",
+          });
         }
       }
 
       const bookmark = await ctx.db.transaction(
-        async (tx) => {
+        (tx) => {
           // Check user quota
-          const quotaResult = await QuotaService.canCreateBookmark(
+          const quotaResult = QuotaService.canCreateBookmarkInTransaction(
             tx,
             ctx.user.id,
           );
@@ -240,43 +359,39 @@ export const bookmarksAppRouter = router({
               message: quotaResult.error,
             });
           }
-          const bookmark = (
-            await tx
-              .insert(bookmarks)
-              .values({
-                userId: ctx.user.id,
-                title: input.title,
-                type: input.type,
-                archived: input.archived,
-                favourited: input.favourited,
-                note: input.note,
-                summary: input.summary,
-                createdAt: input.createdAt,
-                source: input.source,
-                // Only links currently support summarization. Let's set the status to null for other types for now.
-                summarizationStatus:
-                  input.type === BookmarkTypes.LINK ? "pending" : null,
-              })
-              .returning()
-          )[0];
+          const bookmark = tx
+            .insert(bookmarks)
+            .values({
+              userId: ctx.user.id,
+              title: input.title,
+              type: input.type,
+              archived: input.archived,
+              favourited: input.favourited,
+              note: input.note,
+              summary: input.summary,
+              createdAt: input.createdAt,
+              source: input.source,
+              // Only links currently support summarization. Let's set the status to null for other types for now.
+              summarizationStatus:
+                input.type === BookmarkTypes.LINK ? "pending" : null,
+            })
+            .returning()
+            .all()[0];
 
           let content: ZBookmarkContent;
 
           switch (input.type) {
             case BookmarkTypes.LINK: {
-              const link = (
-                await tx
-                  .insert(bookmarkLinks)
-                  .values({
-                    id: bookmark.id,
-                    url: input.url.trim(),
-                  })
-                  .returning()
-              )[0];
+              const link = tx
+                .insert(bookmarkLinks)
+                .values({
+                  id: bookmark.id,
+                  url: input.url.trim(),
+                })
+                .returning()
+                .all()[0];
               if (input.precrawledArchiveId) {
-                await Asset.ensureOwnership(ctx, input.precrawledArchiveId);
-                await tx
-                  .update(assets)
+                tx.update(assets)
                   .set({
                     bookmarkId: bookmark.id,
                     assetType: AssetTypes.LINK_PRECRAWLED_ARCHIVE,
@@ -286,7 +401,8 @@ export const bookmarksAppRouter = router({
                       eq(assets.id, input.precrawledArchiveId),
                       eq(assets.userId, ctx.user.id),
                     ),
-                  );
+                  )
+                  .run();
               }
               content = {
                 type: BookmarkTypes.LINK,
@@ -295,16 +411,15 @@ export const bookmarksAppRouter = router({
               break;
             }
             case BookmarkTypes.TEXT: {
-              const text = (
-                await tx
-                  .insert(bookmarkTexts)
-                  .values({
-                    id: bookmark.id,
-                    text: input.text,
-                    sourceUrl: input.sourceUrl,
-                  })
-                  .returning()
-              )[0];
+              const text = tx
+                .insert(bookmarkTexts)
+                .values({
+                  id: bookmark.id,
+                  text: input.text,
+                  sourceUrl: input.sourceUrl,
+                })
+                .returning()
+                .all()[0];
               content = {
                 type: BookmarkTypes.TEXT,
                 text: text.text ?? "",
@@ -313,7 +428,7 @@ export const bookmarksAppRouter = router({
               break;
             }
             case BookmarkTypes.ASSET: {
-              const [asset] = await tx
+              const [asset] = tx
                 .insert(bookmarkAssets)
                 .values({
                   id: bookmark.id,
@@ -324,22 +439,9 @@ export const bookmarksAppRouter = router({
                   fileName: input.fileName ?? null,
                   sourceUrl: input.sourceUrl ?? null,
                 })
-                .returning();
-              const uploadedAsset = await Asset.fromId(ctx, input.assetId);
-              uploadedAsset.ensureOwnership();
-              if (
-                !uploadedAsset.asset.contentType ||
-                !SUPPORTED_BOOKMARK_ASSET_TYPES.has(
-                  uploadedAsset.asset.contentType,
-                )
-              ) {
-                throw new TRPCError({
-                  code: "BAD_REQUEST",
-                  message: "Unsupported asset type",
-                });
-              }
-              await tx
-                .update(assets)
+                .returning()
+                .all();
+              tx.update(assets)
                 .set({
                   bookmarkId: bookmark.id,
                   assetType: AssetTypes.BOOKMARK_ASSET,
@@ -349,7 +451,8 @@ export const bookmarksAppRouter = router({
                     eq(assets.id, input.assetId),
                     eq(assets.userId, ctx.user.id),
                   ),
-                );
+                )
+                .run();
               content = {
                 type: BookmarkTypes.ASSET,
                 assetType: asset.assetType,
@@ -468,7 +571,7 @@ export const bookmarksAppRouter = router({
     .output(zBookmarkSchema)
     .use(ensureBookmarkOwnership)
     .mutation(async ({ input, ctx }) => {
-      await ctx.db.transaction(async (tx) => {
+      await ctx.db.transaction((tx) => {
         let somethingChanged = false;
 
         // Update link-specific fields if any are provided
@@ -500,10 +603,11 @@ export const bookmarksAppRouter = router({
         }
 
         if (Object.keys(linkUpdateData).length > 0) {
-          const result = await tx
+          const result = tx
             .update(bookmarkLinks)
             .set(linkUpdateData)
-            .where(eq(bookmarkLinks.id, input.bookmarkId));
+            .where(eq(bookmarkLinks.id, input.bookmarkId))
+            .run();
           if (result.changes == 0) {
             throw new TRPCError({
               code: "BAD_REQUEST",
@@ -515,12 +619,13 @@ export const bookmarksAppRouter = router({
         }
 
         if (input.text) {
-          const result = await tx
+          const result = tx
             .update(bookmarkTexts)
             .set({
               text: input.text,
             })
-            .where(eq(bookmarkTexts.id, input.bookmarkId));
+            .where(eq(bookmarkTexts.id, input.bookmarkId))
+            .run();
 
           if (result.changes == 0) {
             throw new TRPCError({
@@ -533,12 +638,13 @@ export const bookmarksAppRouter = router({
         }
 
         if (input.assetContent !== undefined) {
-          const result = await tx
+          const result = tx
             .update(bookmarkAssets)
             .set({
               content: input.assetContent,
             })
-            .where(and(eq(bookmarkAssets.id, input.bookmarkId)));
+            .where(and(eq(bookmarkAssets.id, input.bookmarkId)))
+            .run();
 
           if (result.changes == 0) {
             throw new TRPCError({
@@ -582,15 +688,15 @@ export const bookmarksAppRouter = router({
         }
 
         if (Object.keys(commonUpdateData).length > 1 || somethingChanged) {
-          await tx
-            .update(bookmarks)
+          tx.update(bookmarks)
             .set(commonUpdateData)
             .where(
               and(
                 eq(bookmarks.userId, ctx.user.id),
                 eq(bookmarks.id, input.bookmarkId),
               ),
-            );
+            )
+            .run();
         }
       });
 
@@ -661,29 +767,30 @@ export const bookmarksAppRouter = router({
     )
     .use(ensureBookmarkOwnership)
     .mutation(async ({ input, ctx }) => {
-      await ctx.db.transaction(async (tx) => {
-        const res = await tx
+      await ctx.db.transaction((tx) => {
+        const res = tx
           .update(bookmarkTexts)
           .set({
             text: input.text,
           })
           .where(and(eq(bookmarkTexts.id, input.bookmarkId)))
-          .returning();
+          .returning()
+          .all();
         if (res.length == 0) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Bookmark not found",
           });
         }
-        await tx
-          .update(bookmarks)
+        tx.update(bookmarks)
           .set({ modifiedAt: new Date() })
           .where(
             and(
               eq(bookmarks.id, input.bookmarkId),
               eq(bookmarks.userId, ctx.user.id),
             ),
-          );
+          )
+          .run();
       });
       await Promise.all([
         triggerSearchReindex(input.bookmarkId, {
@@ -813,10 +920,26 @@ export const bookmarksAppRouter = router({
         await Bookmark.fromId(ctx, input.bookmarkId, input.includeContent)
       ).asZBookmark();
     }),
+  getBookmarkReadableContent: bookmarksProcedure
+    .use(createBookmarksQueriedMiddleware())
+    .input(
+      z.object({
+        bookmarkId: z.string(),
+        format: zBookmarkReadableContentFormatSchema.default("markdown"),
+      }),
+    )
+    .output(zBookmarkReadableContentSchema)
+    .use(ensureBookmarkAccess)
+    .query(async ({ input, ctx }) => {
+      return (
+        await Bookmark.fromId(ctx, input.bookmarkId, /* includeContent: */ true)
+      ).asReadableContent(input.format);
+    }),
   searchBookmarks: bookmarksProcedure
     .use(createBookmarksQueriedMiddleware())
     .use(createEventLogMiddleware("search.query"))
     .input(zSearchBookmarksRequestSchema)
+    .use(createSemanticSearchRateLimitMiddleware())
     .output(
       z.object({
         bookmarks: z.array(zBookmarkSchema),
@@ -826,19 +949,22 @@ export const bookmarksAppRouter = router({
     .query(async ({ input, ctx }) => {
       addLogFields<"search.query">({
         "search.has_query": input.text.length > 0,
+        "search.mode": input.searchMode,
       });
-      if (!input.limit) {
-        input.limit = DEFAULT_NUM_BOOKMARKS_PER_PAGE;
-      }
+      const limit = input.limit ?? DEFAULT_NUM_BOOKMARKS_PER_PAGE;
       const sortOrder = input.sortOrder || "relevance";
-      const client = await getSearchClient();
-      if (!client) {
+      const parsedQuery = parseSearchQuery(input.text);
+
+      if (
+        input.searchMode !== "fts" &&
+        (!serverConfig.experimentalFeatures.semanticSearch ||
+          !serverConfig.embedding.enableAutoIndexing)
+      ) {
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Search functionality is not configured",
+          code: "BAD_REQUEST",
+          message: "Semantic search is not enabled",
         });
       }
-      const parsedQuery = parseSearchQuery(input.text);
 
       let filter: FilterQuery[];
       if (parsedQuery.matcher) {
@@ -859,32 +985,168 @@ export const bookmarksAppRouter = router({
        */
       const createdAtSortOrder = sortOrder === "relevance" ? "desc" : sortOrder;
 
-      const resp = await client.search({
-        query: parsedQuery.text,
-        filter,
-        sort: [{ field: "createdAt", order: createdAtSortOrder }],
-        limit: input.limit,
-        ...(input.cursor
-          ? {
-              offset: input.cursor.offset,
-            }
-          : {}),
+      const offset = input.cursor?.offset ?? 0;
+      let hits: { id: string; score: number }[];
+      let hasMore: boolean;
+      let resultCount: number;
+
+      const fullTextSearch = async (limit: number, searchOffset?: number) => {
+        const client = await getSearchClient();
+        if (!client) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Search functionality is not configured",
+          });
+        }
+        return client.search({
+          query: parsedQuery.text,
+          filter,
+          sort: [{ field: "createdAt", order: createdAtSortOrder }],
+          limit,
+          ...(searchOffset !== undefined ? { offset: searchOffset } : {}),
+        });
+      };
+
+      const fullTextPage = (
+        resp: Awaited<ReturnType<typeof fullTextSearch>>,
+      ) => ({
+        hits: resp.hits.map((hit) => ({
+          id: hit.id,
+          score: hit.score ?? 0,
+        })),
+        hasMore: offset + resp.hits.length < resp.totalHits,
+        resultCount: resp.totalHits,
       });
+
+      const degradeToFullTextSearch = async (error?: unknown) => {
+        addLogFields<"search.query">({ "search.degraded": true });
+        if (error) {
+          const message = error instanceof Error ? error.message : `${error}`;
+          logger.warn(
+            `Hybrid semantic search failed; falling back to full-text search: ${message}`,
+          );
+        }
+        return fullTextPage(await fullTextSearch(limit, offset));
+      };
+
+      if (input.searchMode === "fts") {
+        ({ hits, hasMore, resultCount } = fullTextPage(
+          await fullTextSearch(limit, offset),
+        ));
+      } else {
+        // A query made up entirely of qualifiers (e.g. `is:fav`) has nothing to
+        // embed, so it can only be served by full-text search.
+        const hasQueryText = parsedQuery.text.trim().length > 0;
+        let semanticInfraError: unknown;
+        const semanticClients = await (async () => ({
+          embeddingClient: EmbeddingClientFactory.build(),
+          vectorStoreClient: await getVectorStoreClient(),
+        }))().catch((error: unknown) => {
+          if (input.searchMode === "semantic") {
+            throw error;
+          }
+          semanticInfraError = error;
+          return null;
+        });
+        const embeddingClient = semanticClients?.embeddingClient;
+        const vectorStoreClient = semanticClients?.vectorStoreClient;
+        if (!hasQueryText || !embeddingClient || !vectorStoreClient) {
+          if (input.searchMode === "semantic") {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: hasQueryText
+                ? "Semantic search requires configured embedding and vector store providers"
+                : "Semantic search requires a non-empty text query",
+            });
+          }
+
+          // Hybrid search remains useful when embeddings are unavailable or
+          // when there's no text to embed. It degrades to plain full-text
+          // search, which also means date sorting is supported again.
+          ({ hits, hasMore, resultCount } =
+            await degradeToFullTextSearch(semanticInfraError));
+        } else {
+          if (sortOrder !== "relevance") {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "Semantic and hybrid search only support relevance sorting",
+            });
+          }
+
+          const vectorFilter: VectorFilterQuery[] = filter.map((item) =>
+            item.type === "eq"
+              ? { type: "eq", field: item.field, value: item.value }
+              : { type: "in", field: item.field, values: item.values },
+          );
+
+          const semanticSearch = async (limit: number) => {
+            const embeddingResponse =
+              await embeddingClient.generateEmbeddingFromText([
+                parsedQuery.text,
+              ]);
+            const vector = embeddingResponse.embeddings[0];
+            if (!vector) {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: "Embedding provider returned no query embedding",
+              });
+            }
+            return vectorStoreClient.search({
+              vector,
+              filter: vectorFilter,
+              limit,
+              rankingScoreThreshold: SEMANTIC_SCORE_THRESHOLD,
+            });
+          };
+
+          if (input.searchMode === "semantic") {
+            const semanticLimit = offset + limit + 1;
+            const semanticResp = await semanticSearch(semanticLimit);
+            hits = semanticResp.hits.slice(offset, offset + limit);
+            hasMore = semanticResp.hits.length > offset + limit;
+            resultCount = semanticResp.hits.length;
+          } else {
+            // RRF can reorder earlier pages when its input window grows. Fuse a
+            // fixed window so every cursor sees the same ranked candidate pool.
+            const [ftsResult, semanticResult] = await Promise.allSettled([
+              fullTextSearch(HYBRID_CANDIDATES_PER_SOURCE),
+              semanticSearch(HYBRID_CANDIDATES_PER_SOURCE),
+            ]);
+            if (ftsResult.status === "rejected") {
+              throw ftsResult.reason;
+            }
+            if (semanticResult.status === "rejected") {
+              ({ hits, hasMore, resultCount } = await degradeToFullTextSearch(
+                semanticResult.reason,
+              ));
+            } else {
+              const fusedHits = reciprocalRankFusion([
+                ftsResult.value.hits,
+                semanticResult.value.hits,
+              ]);
+              hits = fusedHits.slice(offset, offset + limit);
+              hasMore = fusedHits.length > offset + limit;
+              resultCount = fusedHits.length;
+            }
+          }
+        }
+      }
 
       addLogFields<"search.query">({
-        "search.results_count": resp.totalHits,
+        "search.results_count": resultCount,
       });
 
-      if (resp.hits.length == 0) {
+      if (hits.length == 0) {
         return { bookmarks: [], nextCursor: null };
       }
-      const idToRank = resp.hits.reduce<Record<string, number>>((acc, r) => {
-        acc[r.id] = r.score || 0;
+      const idToRank = hits.reduce<Record<string, number>>((acc, r) => {
+        acc[r.id] = r.score;
         return acc;
       }, {});
 
       const { bookmarks: results } = await Bookmark.loadMulti(ctx, {
-        ids: resp.hits.map((h) => h.id),
+        ids: hits.map((h) => h.id),
         includeContent: input.includeContent,
         sortOrder: "desc", // Doesn't matter, we're sorting again afterwards and the list contain all data
       });
@@ -903,13 +1165,12 @@ export const bookmarksAppRouter = router({
 
       return {
         bookmarks: results.map((b) => b.asZBookmark()),
-        nextCursor:
-          resp.hits.length + (input.cursor?.offset || 0) >= resp.totalHits
-            ? null
-            : {
-                ver: 1 as const,
-                offset: resp.hits.length + (input.cursor?.offset || 0),
-              },
+        nextCursor: hasMore
+          ? {
+              ver: 1 as const,
+              offset: offset + hits.length,
+            }
+          : null,
       };
     }),
   checkUrl: bookmarksProcedure
@@ -1088,24 +1349,25 @@ export const bookmarksAppRouter = router({
       const allIdsToAttach = attachTagsWithNames.map((t) => t.id);
       const idsToRemove = detachTagsWithNames.map((t) => t.id);
 
-      const res = await ctx.db.transaction(async (tx) => {
+      const res = await ctx.db.transaction((tx) => {
         let numChanges = 0;
         // Detaches
         if (idsToRemove.length > 0) {
-          const res = await tx
+          const res = tx
             .delete(tagsOnBookmarks)
             .where(
               and(
                 eq(tagsOnBookmarks.bookmarkId, input.bookmarkId),
                 inArray(tagsOnBookmarks.tagId, idsToRemove),
               ),
-            );
+            )
+            .run();
           numChanges += res.changes;
         }
 
         // Attach tags
         if (allIdsToAttach.length > 0) {
-          const res = await tx
+          const res = tx
             .insert(tagsOnBookmarks)
             .values(
               allIdsToAttach.map((i) => ({
@@ -1114,21 +1376,22 @@ export const bookmarksAppRouter = router({
                 attachedBy: tagIdToAttachedBy.get(i) ?? "human",
               })),
             )
-            .onConflictDoNothing();
+            .onConflictDoNothing()
+            .run();
           numChanges += res.changes;
         }
 
         // Update bookmark modified timestamp
         if (numChanges > 0) {
-          await tx
-            .update(bookmarks)
+          tx.update(bookmarks)
             .set({ modifiedAt: new Date() })
             .where(
               and(
                 eq(bookmarks.id, input.bookmarkId),
                 eq(bookmarks.userId, ctx.user.id),
               ),
-            );
+            )
+            .run();
         }
 
         return {

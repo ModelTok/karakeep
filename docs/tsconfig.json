@@ -4,6 +4,6 @@
     "baseUrl": "."
   },
   "include": [
-    "../node_modules/docusaurus-plugin-openapi-docs/src/plugin-content-docs-types.d.ts"
+    "../node_modules/docusaurus-plugin-openapi-docs/src/types.d.ts"
   ]
 }

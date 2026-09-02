@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "1c7250d6-123d-4e13-a105-af5e08339ba0",
-  "prevId": "a23440dc-2404-47fe-9cf8-583734b0bb1d",
+  "id": "b970efae-16a6-4246-b778-939a99698f09",
+  "prevId": "3e2d6b09-5a4e-4ddb-b44b-70ded16e2ae0",
   "tables": {
     "account": {
       "name": "account",
@@ -610,16 +610,9 @@
           "autoincrement": false,
           "default": 200
         },
-        "transcript": {
-          "name": "transcript",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "transcriptionStatus": {
-          "name": "transcriptionStatus",
-          "type": "text",
+        "probeMetadataAt": {
+          "name": "probeMetadataAt",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -1775,6 +1768,13 @@
           ],
           "isUnique": false
         },
+        "importStaging_resultBookmarkId_idx": {
+          "name": "importStaging_resultBookmarkId_idx",
+          "columns": [
+            "resultBookmarkId"
+          ],
+          "isUnique": false
+        },
         "importStaging_status_idx": {
           "name": "importStaging_status_idx",
           "columns": [
@@ -2274,6 +2274,13 @@
           "name": "rssFeedImports_entryIdIdx_idx",
           "columns": [
             "entryId"
+          ],
+          "isUnique": false
+        },
+        "rssFeedImports_bookmarkId_idx": {
+          "name": "rssFeedImports_bookmarkId_idx",
+          "columns": [
+            "bookmarkId"
           ],
           "isUnique": false
         },
@@ -3170,14 +3177,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": 30
-        },
-        "digestEnabled": {
-          "name": "digestEnabled",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
         },
         "readerFontSize": {
           "name": "readerFontSize",

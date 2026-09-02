@@ -1,12 +1,22 @@
-import { CallToolResult } from "@modelcontextprotocol/sdk/types";
+import { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import { karakeepClient, mcpServer } from "./shared";
-import { toMcpToolError } from "./utils";
+import {
+  zEditBookmarkListSchema,
+  zEditBookmarkListSchemaWithValidation,
+} from "@karakeep/shared/types/lists";
 
-mcpServer.tool(
+import { karakeepClient, registerTool } from "./shared";
+import {
+  compactBookmark,
+  compactList,
+  pickDefined,
+  toMcpToolError,
+} from "./utils";
+
+registerTool(
   "get-lists",
-  `Retrieves a list of lists.`,
+  { description: `Retrieves a list of lists.` },
   async (): Promise<CallToolResult> => {
     const res = await karakeepClient.GET("/lists", {
       params: {},
@@ -18,27 +28,174 @@ mcpServer.tool(
       content: [
         {
           type: "text",
-          text: res.data.lists
-            .map(
-              (list) => `List ID: ${list.id}
-Name: ${list.name}
-Icon: ${list.icon}
-Description: ${list.description ?? ""}
-Parent ID: ${list.parentId}`,
-            )
-            .join("\n\n"),
+          text: res.data.lists.map(compactList).join("\n\n"),
         },
       ],
     };
   },
 );
 
-mcpServer.tool(
-  "add-bookmark-to-list",
-  `Add a bookmark to a list.`,
+export const getListInputSchema = {
+  listId: z.string().min(1).describe(`The id of the list to retrieve.`),
+};
+
+export async function getListHandler({
+  listId,
+}: {
+  listId: string;
+}): Promise<CallToolResult> {
+  const res = await karakeepClient.GET("/lists/{listId}", {
+    params: { path: { listId } },
+  });
+  if (!res.data) {
+    return toMcpToolError(res.error);
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: compactList(res.data),
+      },
+    ],
+  };
+}
+
+registerTool(
+  "get-list",
   {
-    listId: z.string().describe(`The listId to add the bookmark to.`),
-    bookmarkId: z.string().describe(`The bookmarkId to add.`),
+    description: `Retrieve a single list by its id.`,
+    inputSchema: z.object(getListInputSchema),
+  },
+  getListHandler,
+);
+
+const sharedListEditShape = zEditBookmarkListSchema.omit({
+  listId: true,
+}).shape;
+
+const updateListFields = {
+  name: sharedListEditShape.name.describe(`New name for the list.`),
+  icon: sharedListEditShape.icon.describe(`New emoji icon for the list.`),
+  description: sharedListEditShape.description.describe(
+    `New description for the list. Pass null to clear.`,
+  ),
+  parentId: sharedListEditShape.parentId.describe(
+    `New parent list id. Pass null to move to the root.`,
+  ),
+  query: sharedListEditShape.query.describe(
+    `New smart-list query. Only meaningful for smart lists.`,
+  ),
+  public: sharedListEditShape.public.describe(
+    `Whether the list is publicly accessible.`,
+  ),
+};
+
+export const updateListInputSchema = {
+  listId: z.string().min(1).describe(`The id of the list to update.`),
+  ...updateListFields,
+};
+
+export type UpdateListInput = z.infer<
+  z.ZodObject<typeof updateListInputSchema>
+>;
+type UpdateListBody = Omit<UpdateListInput, "listId">;
+
+export async function updateListHandler(
+  input: UpdateListInput,
+): Promise<CallToolResult> {
+  const refined = zEditBookmarkListSchemaWithValidation.safeParse(input);
+  if (!refined.success) {
+    const issue = refined.error.issues[0];
+    return toMcpToolError(issue?.message ?? "Invalid input for update-list");
+  }
+
+  const { listId, ...rest } = input;
+  const body: UpdateListBody = pickDefined(rest);
+
+  if (Object.keys(body).length === 0) {
+    return toMcpToolError(
+      `update-list requires at least one field to update (name, icon, description, parentId, query, or public).`,
+    );
+  }
+
+  const res = await karakeepClient.PATCH("/lists/{listId}", {
+    params: { path: { listId } },
+    body,
+  });
+  if (!res.data) {
+    return toMcpToolError(res.error);
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: `List ${res.data.id} updated.
+
+${compactList(res.data)}`,
+      },
+    ],
+  };
+}
+
+registerTool(
+  "update-list",
+  {
+    description: `Update a list. Only the fields you pass are changed. Length caps and smart-list query rules come from the shared list schema.`,
+    inputSchema: z.object(updateListInputSchema),
+  },
+  updateListHandler,
+);
+
+export const deleteListInputSchema = {
+  listId: z.string().min(1).describe(`The id of the list to delete.`),
+};
+
+export async function deleteListHandler({
+  listId,
+}: {
+  listId: string;
+}): Promise<CallToolResult> {
+  const getRes = await karakeepClient.GET("/lists/{listId}", {
+    params: { path: { listId } },
+  });
+  if (!getRes.data) {
+    return toMcpToolError(getRes.error);
+  }
+  const { id, name } = getRes.data;
+
+  const delRes = await karakeepClient.DELETE("/lists/{listId}", {
+    params: { path: { listId: id } },
+  });
+  if (delRes.error) {
+    return toMcpToolError(delRes.error);
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Deleted list "${name}" (id: ${id}).`,
+      },
+    ],
+  };
+}
+
+registerTool(
+  "delete-list",
+  {
+    description: `Delete a list by id. Bookmarks inside the list are not deleted. Child lists are also not deleted. Any child lists become root-level lists (their parentId is set to null). If that isn't the tree change you want, move or re-parent the children before calling this.`,
+    inputSchema: z.object(deleteListInputSchema),
+  },
+  deleteListHandler,
+);
+
+registerTool(
+  "add-bookmark-to-list",
+  {
+    description: `Add a bookmark to a list.`,
+    inputSchema: z.object({
+      listId: z.string().describe(`The listId to add the bookmark to.`),
+      bookmarkId: z.string().describe(`The bookmarkId to add.`),
+    }),
   },
   async ({ listId, bookmarkId }): Promise<CallToolResult> => {
     const res = await karakeepClient.PUT(
@@ -66,12 +223,14 @@ mcpServer.tool(
   },
 );
 
-mcpServer.tool(
+registerTool(
   "remove-bookmark-from-list",
-  `Remove a bookmark from a list.`,
   {
-    listId: z.string().describe(`The listId to remove the bookmark from.`),
-    bookmarkId: z.string().describe(`The bookmarkId to remove.`),
+    description: `Remove a bookmark from a list.`,
+    inputSchema: z.object({
+      listId: z.string().describe(`The listId to remove the bookmark from.`),
+      bookmarkId: z.string().describe(`The bookmarkId to remove.`),
+    }),
   },
   async ({ listId, bookmarkId }): Promise<CallToolResult> => {
     const res = await karakeepClient.DELETE(
@@ -99,16 +258,85 @@ mcpServer.tool(
   },
 );
 
-mcpServer.tool(
-  "create-list",
-  `Create a list.`,
+export const getListBookmarksInputSchema = {
+  listId: z
+    .string()
+    .min(1)
+    .describe(`The id of the list whose bookmarks to retrieve.`),
+  sortOrder: z
+    .enum(["asc", "desc"])
+    .optional()
+    .describe(`Sort by creation date. Defaults to newest first.`),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe(`Maximum number of bookmarks to return per page.`),
+  cursor: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(`Cursor from a previous response to fetch the next page.`),
+  includeContent: z
+    .boolean()
+    .optional()
+    .describe(`Whether to include each bookmark's full content.`),
+};
+
+export type GetListBookmarksInput = z.infer<
+  z.ZodObject<typeof getListBookmarksInputSchema>
+>;
+
+export async function getListBookmarksHandler(
+  input: GetListBookmarksInput,
+): Promise<CallToolResult> {
+  const { listId, includeContent, ...query } = input;
+  const res = await karakeepClient.GET("/lists/{listId}/bookmarks", {
+    params: {
+      path: { listId },
+      query: pickDefined({ ...query, includeContent }),
+    },
+  });
+  if (!res.data) {
+    return toMcpToolError(res.error);
+  }
+  const cursorLine = res.data.nextCursor
+    ? `\n\nNext page cursor: ${res.data.nextCursor}`
+    : "";
+  const bookmarks =
+    res.data.bookmarks.length > 0
+      ? res.data.bookmarks
+          .map((bookmark) => compactBookmark(bookmark, { includeContent }))
+          .join("\n\n")
+      : "No bookmarks found in this list.";
+  return {
+    content: [{ type: "text", text: bookmarks + cursorLine }],
+  };
+}
+
+registerTool(
+  "get-list-bookmarks",
   {
-    name: z.string().describe(`The name of the list.`),
-    icon: z.string().describe(`The emoji icon of the list.`),
-    parentId: z
-      .string()
-      .optional()
-      .describe(`The parent list id of this list.`),
+    description: `List bookmarks in a list by its stable id. Smart lists are evaluated using their saved query.`,
+    inputSchema: z.object(getListBookmarksInputSchema),
+    annotations: { readOnlyHint: true },
+  },
+  getListBookmarksHandler,
+);
+
+registerTool(
+  "create-list",
+  {
+    description: `Create a list.`,
+    inputSchema: z.object({
+      name: z.string().describe(`The name of the list.`),
+      icon: z.string().describe(`The emoji icon of the list.`),
+      parentId: z
+        .string()
+        .optional()
+        .describe(`The parent list id of this list.`),
+    }),
   },
   async ({ name, icon, parentId }): Promise<CallToolResult> => {
     const res = await karakeepClient.POST("/lists", {

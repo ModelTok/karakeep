@@ -1,12 +1,11 @@
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import useAppSettings from "@/lib/settings";
+import QueryPageState from "@/components/QueryPageState";
 
 import type { ZGetBookmarksRequest } from "@karakeep/shared/types/bookmarks";
 import { useTRPC } from "@karakeep/shared-react/trpc";
 import { BookmarkTypes } from "@karakeep/shared/types/bookmarks";
 
-import FullPageError from "../FullPageError";
-import FullPageSpinner from "../ui/FullPageSpinner";
 import BookmarkList from "./BookmarkList";
 
 export default function UpdatingBookmarkList({
@@ -25,6 +24,8 @@ export default function UpdatingBookmarkList({
     isPlaceholderData,
     error,
     fetchNextPage,
+    hasNextPage,
+    isFetching,
     isFetchingNextPage,
     refetch,
   } = useInfiniteQuery(
@@ -42,17 +43,20 @@ export default function UpdatingBookmarkList({
     ),
   );
 
-  if (error) {
-    return <FullPageError error={error.message} onRetry={() => refetch()} />;
-  }
-
-  if (isPending || !data) {
-    return <FullPageSpinner />;
+  if (!data) {
+    return <QueryPageState error={error} onRetry={() => refetch()} />;
   }
 
   const onRefresh = () => {
     queryClient.invalidateQueries(api.bookmarks.getBookmarks.pathFilter());
     queryClient.invalidateQueries(api.bookmarks.getBookmark.pathFilter());
+  };
+
+  const onEndReached = () => {
+    if (!hasNextPage || isFetching) {
+      return;
+    }
+    void fetchNextPage({ cancelRefetch: false });
   };
 
   return (
@@ -62,7 +66,7 @@ export default function UpdatingBookmarkList({
         .filter((b) => b.content.type != BookmarkTypes.UNKNOWN)}
       header={header}
       onRefresh={onRefresh}
-      fetchNextPage={fetchNextPage}
+      fetchNextPage={onEndReached}
       isFetchingNextPage={isFetchingNextPage}
       isRefreshing={isPending || isPlaceholderData}
     />

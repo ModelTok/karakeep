@@ -1,7 +1,15 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import type {
+  Icon,
+  StandardSchemaWithJSON,
+  ToolAnnotations,
+  ToolCallback,
+} from "@modelcontextprotocol/server";
 import TurndownService from "turndown";
 
 import { createKarakeepClient } from "@karakeep/sdk";
+
+import packageJson from "../package.json";
 
 const addr = process.env.KARAKEEP_API_ADDR;
 const apiKey = process.env.KARAKEEP_API_KEY;
@@ -26,9 +34,42 @@ export const karakeepClient = createKarakeepClient({
   },
 });
 
-export const mcpServer = new McpServer({
-  name: "Karakeep",
-  version: "0.23.0",
-});
+type ToolRegistration = (server: McpServer) => void;
+
+const toolRegistrations: ToolRegistration[] = [];
+
+export function registerTool<
+  OutputArgs extends StandardSchemaWithJSON,
+  InputArgs extends StandardSchemaWithJSON | undefined = undefined,
+>(
+  name: string,
+  config: {
+    title?: string;
+    description?: string;
+    inputSchema?: InputArgs;
+    outputSchema?: OutputArgs;
+    annotations?: ToolAnnotations;
+    icons?: Icon[];
+    _meta?: Record<string, unknown>;
+  },
+  callback: ToolCallback<InputArgs>,
+) {
+  toolRegistrations.push((server) => {
+    server.registerTool(name, config, callback);
+  });
+}
+
+export function createMcpServer() {
+  const server = new McpServer({
+    name: "Karakeep",
+    version: packageJson.version,
+  });
+
+  for (const register of toolRegistrations) {
+    register(server);
+  }
+
+  return server;
+}
 
 export const turndownService = new TurndownService();

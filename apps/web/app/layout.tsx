@@ -3,7 +3,6 @@ import { Inter } from "next/font/google";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 
 import "@karakeep/tailwind-config/globals.css";
-import "streamdown/styles.css";
 
 import type { Viewport } from "next";
 import React from "react";
@@ -25,6 +24,23 @@ export const metadata: Metadata = {
   applicationName: "Karakeep",
   description:
     "The Bookmark Everything app. Hoard links, notes, and images and they will get automatically tagged AI.",
+  icons: {
+    icon: [
+      {
+        url: "/icons/logo-icon.svg",
+        type: "image/svg+xml",
+        sizes: "any",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/icons/logo-icon-dark.svg",
+        type: "image/svg+xml",
+        sizes: "any",
+        media: "(prefers-color-scheme: dark)",
+      },
+    ],
+    apple: "/apple-icon.png",
+  },
   appleWebApp: {
     capable: true,
     title: "Karakeep",

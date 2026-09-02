@@ -68,7 +68,7 @@ function DeleteAllUnusedTags({ numUnusedTags }: { numUnusedTags: number }) {
           loading={isPending}
           onClick={() => mutate()}
         >
-          DELETE THEM ALL
+          {t("actions.delete")}
         </ActionButton>
       )}
     >

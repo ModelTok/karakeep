@@ -1,16 +1,12 @@
-import { CallToolResult } from "@modelcontextprotocol/sdk/types";
+import { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
-import { karakeepClient, mcpServer, turndownService } from "./shared";
-import { compactBookmark, toMcpToolError } from "./utils";
+import { karakeepClient, registerTool, turndownService } from "./shared";
+import { compactBookmark, compactList, toMcpToolError } from "./utils";
 
 // Tools
-mcpServer.tool(
-  "search-bookmarks",
-  `Search for bookmarks matching a specific a query.
-`,
-  {
-    query: z.string().describe(`
+export const searchBookmarksInputSchema = {
+  query: z.string().describe(`
     By default, this will do a full-text search, but you can also use qualifiers to filter the results.
 You can search bookmarks using specific qualifiers. is:fav finds favorited bookmarks,
 is:archived searches archived bookmarks, is:tagged finds those with tags,
@@ -29,52 +25,86 @@ is:archived and (list:reading or #work)
 
 ### Combine text search with qualifiers
 machine learning is:fav`),
-    limit: z
-      .number()
-      .optional()
-      .describe(`The number of results to return in a single query.`)
-      .default(10),
-    nextCursor: z
-      .string()
-      .optional()
-      .describe(
-        `The next cursor to use for pagination. The value for this is returned from a previous call to this tool.`,
-      ),
-  },
-  async ({ query, limit, nextCursor }): Promise<CallToolResult> => {
-    const res = await karakeepClient.GET("/bookmarks/search", {
-      params: {
-        query: {
-          q: query,
-          limit: limit,
-          includeContent: false,
-          cursor: nextCursor,
-        },
+  limit: z
+    .number()
+    .optional()
+    .describe(`The number of results to return in a single query.`)
+    .default(10),
+  nextCursor: z
+    .string()
+    .optional()
+    .describe(
+      `The next cursor to use for pagination. The value for this is returned from a previous call to this tool.`,
+    ),
+  sortOrder: z
+    .enum(["asc", "desc", "relevance"])
+    .optional()
+    .describe(`Sort by relevance or creation date. Defaults to relevance.`),
+  searchMode: z
+    .enum(["fts", "semantic", "hybrid"])
+    .optional()
+    .describe(
+      `Search strategy. 'fts' uses full-text search, 'semantic' uses embeddings, and 'hybrid' combines both. Semantic and hybrid modes only support relevance sorting. Defaults to 'fts'.`,
+    )
+    .default("fts"),
+};
+
+export type SearchBookmarksInput = z.infer<
+  z.ZodObject<typeof searchBookmarksInputSchema>
+>;
+
+export async function searchBookmarksHandler({
+  query,
+  limit,
+  nextCursor,
+  sortOrder,
+  searchMode,
+}: SearchBookmarksInput): Promise<CallToolResult> {
+  const res = await karakeepClient.GET("/bookmarks/search", {
+    params: {
+      query: {
+        q: query,
+        limit: limit,
+        includeContent: false,
+        cursor: nextCursor,
+        sortOrder,
+        searchMode,
       },
-    });
-    if (!res.data) {
-      return toMcpToolError(res.error);
-    }
-    return {
-      content: [
-        {
-          type: "text",
-          text: `
-${res.data.bookmarks.map(compactBookmark).join("\n\n")}
+    },
+  });
+  if (!res.data) {
+    return toMcpToolError(res.error);
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: `
+${res.data.bookmarks.map((bm) => compactBookmark(bm)).join("\n\n")}
 
 Next cursor: ${res.data.nextCursor ? `'${res.data.nextCursor}'` : "no more pages"}
 `,
-        },
-      ],
-    };
+      },
+    ],
+  };
+}
+
+registerTool(
+  "search-bookmarks",
+  {
+    description: `Search for bookmarks matching a specific query using full-text, semantic, or hybrid search.`,
+    inputSchema: z.object(searchBookmarksInputSchema),
   },
+  searchBookmarksHandler,
 );
 
-mcpServer.tool(
+registerTool(
   "get-bookmark",
-  `Get a bookmark by id.`,
   {
-    bookmarkId: z.string().describe(`The bookmarkId to get.`),
+    description: `Get a bookmark by id.`,
+    inputSchema: z.object({
+      bookmarkId: z.string().describe(`The bookmarkId to get.`),
+    }),
   },
   async ({ bookmarkId }): Promise<CallToolResult> => {
     const res = await karakeepClient.GET(`/bookmarks/{bookmarkId}`, {
@@ -101,17 +131,62 @@ mcpServer.tool(
   },
 );
 
-mcpServer.tool(
-  "create-bookmark",
-  `Create a link bookmark or a text bookmark`,
+export const getBookmarkListsInputSchema = {
+  bookmarkId: z
+    .string()
+    .min(1)
+    .describe(`The id of the bookmark whose lists to retrieve.`),
+};
+
+export async function getBookmarkListsHandler({
+  bookmarkId,
+}: {
+  bookmarkId: string;
+}): Promise<CallToolResult> {
+  const res = await karakeepClient.GET("/bookmarks/{bookmarkId}/lists", {
+    params: { path: { bookmarkId } },
+  });
+  if (!res.data) {
+    return toMcpToolError(res.error);
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          res.data.lists.length > 0
+            ? res.data.lists.map(compactList).join("\n\n")
+            : "This bookmark is not in any lists.",
+      },
+    ],
+  };
+}
+
+registerTool(
+  "get-bookmark-lists",
   {
-    type: z.enum(["link", "text"]).describe(`The type of bookmark to create.`),
-    title: z.string().optional().describe(`The title of the bookmark`),
-    content: z
-      .string()
-      .describe(
-        "If type is text, the text to be bookmarked. If the type is link, then it's the URL to be bookmarked.",
-      ),
+    description: `List every list that contains a bookmark.`,
+    inputSchema: z.object(getBookmarkListsInputSchema),
+    annotations: { readOnlyHint: true },
+  },
+  getBookmarkListsHandler,
+);
+
+registerTool(
+  "create-bookmark",
+  {
+    description: `Create a link bookmark or a text bookmark`,
+    inputSchema: z.object({
+      type: z
+        .enum(["link", "text"])
+        .describe(`The type of bookmark to create.`),
+      title: z.string().optional().describe(`The title of the bookmark`),
+      content: z
+        .string()
+        .describe(
+          "If type is text, the text to be bookmarked. If the type is link, then it's the URL to be bookmarked.",
+        ),
+    }),
   },
   async ({ title, type, content }): Promise<CallToolResult> => {
     const res = await karakeepClient.POST(`/bookmarks`, {
@@ -142,51 +217,53 @@ mcpServer.tool(
   },
 );
 
-mcpServer.tool(
+registerTool(
   "update-bookmark",
-  `Update fields on an existing bookmark. Only the fields you pass are modified; omitted fields stay unchanged. Returns the updated bookmark.`,
   {
-    bookmarkId: z.string().describe(`The bookmarkId to update.`),
-    title: z
-      .string()
-      .nullable()
-      .optional()
-      .describe(`The bookmark's user-set title. Pass null to clear it.`),
-    note: z.string().optional().describe(`A free-form note on the bookmark.`),
-    summary: z
-      .string()
-      .nullable()
-      .optional()
-      .describe(`The bookmark's summary. Pass null to clear it.`),
-    archived: z
-      .boolean()
-      .optional()
-      .describe(`Whether the bookmark is archived.`),
-    favourited: z
-      .boolean()
-      .optional()
-      .describe(`Whether the bookmark is favourited.`),
-    url: z.string().url().optional().describe(`New URL for a link bookmark.`),
-    description: z
-      .string()
-      .nullable()
-      .optional()
-      .describe(`Link description. Pass null to clear it.`),
-    author: z
-      .string()
-      .nullable()
-      .optional()
-      .describe(`Link author. Pass null to clear it.`),
-    publisher: z
-      .string()
-      .nullable()
-      .optional()
-      .describe(`Link publisher. Pass null to clear it.`),
-    createdAt: z
-      .string()
-      .datetime()
-      .optional()
-      .describe(`Override the bookmark's createdAt timestamp (ISO 8601).`),
+    description: `Update fields on an existing bookmark. Only the fields you pass are modified; omitted fields stay unchanged. Returns the updated bookmark.`,
+    inputSchema: z.object({
+      bookmarkId: z.string().describe(`The bookmarkId to update.`),
+      title: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(`The bookmark's user-set title. Pass null to clear it.`),
+      note: z.string().optional().describe(`A free-form note on the bookmark.`),
+      summary: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(`The bookmark's summary. Pass null to clear it.`),
+      archived: z
+        .boolean()
+        .optional()
+        .describe(`Whether the bookmark is archived.`),
+      favourited: z
+        .boolean()
+        .optional()
+        .describe(`Whether the bookmark is favourited.`),
+      url: z.string().url().optional().describe(`New URL for a link bookmark.`),
+      description: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(`Link description. Pass null to clear it.`),
+      author: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(`Link author. Pass null to clear it.`),
+      publisher: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(`Link publisher. Pass null to clear it.`),
+      createdAt: z
+        .string()
+        .datetime()
+        .optional()
+        .describe(`Override the bookmark's createdAt timestamp (ISO 8601).`),
+    }),
   },
   async ({ bookmarkId, ...fields }): Promise<CallToolResult> => {
     const patchRes = await karakeepClient.PATCH(`/bookmarks/{bookmarkId}`, {
@@ -224,42 +301,93 @@ mcpServer.tool(
   },
 );
 
-mcpServer.tool(
-  "get-bookmark-content",
-  `Get the content of the bookmark in markdown`,
-  {
-    bookmarkId: z.string().describe(`The bookmarkId to get content for.`),
-  },
-  async ({ bookmarkId }): Promise<CallToolResult> => {
-    const res = await karakeepClient.GET(`/bookmarks/{bookmarkId}`, {
-      params: {
-        path: {
-          bookmarkId,
-        },
-        query: {
-          includeContent: true,
-        },
+export const getBookmarkContentInputSchema = {
+  bookmarkId: z.string().describe(`The bookmarkId to get content for.`),
+};
+
+export async function getBookmarkContentHandler({
+  bookmarkId,
+}: {
+  bookmarkId: string;
+}): Promise<CallToolResult> {
+  const res = await karakeepClient.GET(`/bookmarks/{bookmarkId}`, {
+    params: {
+      path: { bookmarkId },
+      query: { includeContent: true },
+    },
+  });
+  if (!res.data) {
+    return toMcpToolError(res.error);
+  }
+  let content;
+  if (res.data.content.type === "link") {
+    const htmlContent = res.data.content.htmlContent;
+    content = turndownService.turndown(htmlContent ?? "");
+  } else if (res.data.content.type === "text") {
+    content = res.data.content.text;
+  } else if (res.data.content.type === "asset") {
+    content = res.data.content.content;
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: content ?? "",
       },
-    });
-    if (!res.data) {
-      return toMcpToolError(res.error);
-    }
-    let content;
-    if (res.data.content.type === "link") {
-      const htmlContent = res.data.content.htmlContent;
-      content = turndownService.turndown(htmlContent);
-    } else if (res.data.content.type === "text") {
-      content = res.data.content.text;
-    } else if (res.data.content.type === "asset") {
-      content = res.data.content.content;
-    }
-    return {
-      content: [
-        {
-          type: "text",
-          text: content ?? "",
-        },
-      ],
-    };
+    ],
+  };
+}
+
+registerTool(
+  "get-bookmark-content",
+  {
+    description: `Get the content of the bookmark in markdown`,
+    inputSchema: z.object(getBookmarkContentInputSchema),
   },
+  getBookmarkContentHandler,
+);
+
+export const deleteBookmarkInputSchema = {
+  bookmarkId: z.string().min(1).describe(`The id of the bookmark to delete.`),
+};
+
+export async function deleteBookmarkHandler({
+  bookmarkId,
+}: {
+  bookmarkId: string;
+}): Promise<CallToolResult> {
+  const getRes = await karakeepClient.GET("/bookmarks/{bookmarkId}", {
+    params: { path: { bookmarkId }, query: { includeContent: false } },
+  });
+  if (!getRes.data) {
+    return toMcpToolError(getRes.error);
+  }
+  const { id } = getRes.data;
+  const titleFromContent =
+    getRes.data.content.type === "link" ? getRes.data.content.title : undefined;
+  const label = getRes.data.title ?? titleFromContent ?? id;
+
+  const delRes = await karakeepClient.DELETE("/bookmarks/{bookmarkId}", {
+    params: { path: { bookmarkId: id } },
+  });
+  if (delRes.error) {
+    return toMcpToolError(delRes.error);
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Deleted bookmark "${label}" (id: ${id}).`,
+      },
+    ],
+  };
+}
+
+registerTool(
+  "delete-bookmark",
+  {
+    description: `Delete a bookmark by id. This is destructive — the bookmark, its highlights, and its assets are removed.`,
+    inputSchema: z.object(deleteBookmarkInputSchema),
+  },
+  deleteBookmarkHandler,
 );

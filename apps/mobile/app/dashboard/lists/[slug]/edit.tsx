@@ -1,20 +1,29 @@
 import { useEffect, useState } from "react";
-import { View } from "react-native";
+import { ScrollView, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { ListParentField } from "@/components/lists/list-parent-field";
+import QueryPageState from "@/components/QueryPageState";
 import { Button } from "@/components/ui/Button";
+import { EmojiPicker } from "@/components/ui/emoji-picker";
 import FullPageSpinner from "@/components/ui/FullPageSpinner";
 import { Input } from "@/components/ui/Input";
 import { Text } from "@/components/ui/Text";
 import { useToast } from "@/components/ui/Toast";
+import { NO_PARENT_VALUE } from "@/lib/list-parent-selection";
 import { useQuery } from "@tanstack/react-query";
 
 import { useEditBookmarkList } from "@karakeep/shared-react/hooks/lists";
 import { useTRPC } from "@karakeep/shared-react/trpc";
 
 const EditListPage = () => {
-  const { slug: listId } = useLocalSearchParams<{ slug?: string | string[] }>();
+  const { slug: listId, selectedParentId } = useLocalSearchParams<{
+    slug?: string | string[];
+    selectedParentId?: string | string[];
+  }>();
   const [text, setText] = useState("");
+  const [icon, setIcon] = useState("📁");
   const [query, setQuery] = useState("");
+  const [parentId, setParentId] = useState<string | null>(null);
   const { toast } = useToast();
   const api = useTRPC();
   const { mutate, isPending: editIsPending } = useEditBookmarkList({
@@ -42,7 +51,11 @@ const EditListPage = () => {
     throw new Error("Unexpected param type");
   }
 
-  const { data: list, isLoading: fetchIsPending } = useQuery(
+  const {
+    data: list,
+    error,
+    refetch,
+  } = useQuery(
     api.lists.get.queryOptions({
       listId,
     }),
@@ -55,8 +68,16 @@ const EditListPage = () => {
   useEffect(() => {
     if (!list) return;
     setText(list.name ?? "");
+    setIcon(list.icon || "📁");
     setQuery(list.query ?? "");
-  }, [list?.id, list?.query, list?.name]);
+    setParentId(list.parentId);
+  }, [list?.icon, list?.id, list?.parentId, list?.query, list?.name]);
+
+  useEffect(() => {
+    if (typeof selectedParentId !== "string") return;
+    setParentId(selectedParentId === NO_PARENT_VALUE ? null : selectedParentId);
+    router.setParams({ selectedParentId: undefined });
+  }, [selectedParentId]);
 
   const onSubmit = () => {
     if (!text.trim()) {
@@ -75,18 +96,26 @@ const EditListPage = () => {
     mutate({
       listId,
       name: text.trim(),
+      icon,
+      parentId,
       query: list?.type === "smart" ? query.trim() : undefined,
     });
   };
 
-  const isPending = fetchIsPending || editIsPending;
+  if (!list) {
+    return <QueryPageState error={error} onRetry={() => refetch()} />;
+  }
 
   return (
     <>
-      {isPending ? (
+      {editIsPending ? (
         <FullPageSpinner />
       ) : (
-        <View className="gap-3 px-4">
+        <ScrollView
+          contentInsetAdjustmentBehavior="automatic"
+          keyboardShouldPersistTaps="handled"
+          contentContainerClassName="gap-4 px-4 pb-8"
+        >
           {/* List Type Info - not editable */}
           <View className="gap-2">
             <Text className="text-sm text-muted-foreground">List Type</Text>
@@ -110,18 +139,33 @@ const EditListPage = () => {
             </View>
           </View>
 
-          {/* List Name */}
-          <View className="flex flex-row items-center gap-1">
-            <Text className="shrink p-2">{list?.icon || "🚀"}</Text>
-            <Input
-              className="flex-1 bg-card"
-              onChangeText={setText}
-              value={text}
-              placeholder="List Name"
-              autoFocus
-              autoCapitalize={"none"}
-            />
-          </View>
+          <EmojiPicker value={icon} onChange={setIcon} />
+
+          <Input
+            className="bg-card"
+            label="List Name"
+            labelClasses="text-sm text-muted-foreground"
+            onChangeText={setText}
+            value={text}
+            placeholder="Reading list"
+            autoFocus
+            autoCapitalize="sentences"
+          />
+
+          <ListParentField
+            value={parentId}
+            onPress={() =>
+              router.push({
+                pathname: "/dashboard/lists/select-parent",
+                params: {
+                  returnTo: "edit",
+                  listId,
+                  selectedParentId: parentId ?? NO_PARENT_VALUE,
+                  hideSubtreeOf: listId,
+                },
+              })
+            }
+          />
 
           {/* Smart List Query Input */}
           {list?.type === "smart" && (
@@ -143,10 +187,10 @@ const EditListPage = () => {
             </View>
           )}
 
-          <Button disabled={isPending} onPress={onSubmit}>
+          <Button disabled={editIsPending} onPress={onSubmit}>
             <Text>Save</Text>
           </Button>
-        </View>
+        </ScrollView>
       )}
     </>
   );

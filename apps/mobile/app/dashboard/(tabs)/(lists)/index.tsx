@@ -8,15 +8,14 @@ import {
 } from "react-native";
 import * as Haptics from "expo-haptics";
 import { Link, router } from "expo-router";
-import FullPageError from "@/components/FullPageError";
+import QueryPageState from "@/components/QueryPageState";
 import ChevronRight from "@/components/ui/ChevronRight";
 import { FAB } from "@/components/ui/FAB";
-import FullPageSpinner from "@/components/ui/FullPageSpinner";
 import { Text } from "@/components/ui/Text";
 import { useColorScheme } from "@/lib/useColorScheme";
 import { condProps } from "@/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react-native";
+import { ChevronDown, Plus } from "lucide-react-native";
 
 import { useBookmarkLists } from "@karakeep/shared-react/hooks/lists";
 import { useTRPC } from "@karakeep/shared-react/trpc";
@@ -33,6 +32,10 @@ interface ListLink {
   collapsed: boolean;
   isSharedSection?: boolean;
   numBookmarks?: number;
+}
+
+function byName(a: ZBookmarkListTreeNode, b: ZBookmarkListTreeNode) {
+  return a.item.name.localeCompare(b.item.name);
 }
 
 function traverseTree(
@@ -56,16 +59,18 @@ function traverseTree(
   });
 
   if (node.children && showChildrenOf[node.item.id]) {
-    node.children.forEach((child) =>
-      traverseTree(
-        child,
-        links,
-        showChildrenOf,
-        listStats,
-        node.item.id,
-        level + 1,
-      ),
-    );
+    [...node.children]
+      .sort(byName)
+      .forEach((child) =>
+        traverseTree(
+          child,
+          links,
+          showChildrenOf,
+          listStats,
+          node.item.id,
+          level + 1,
+        ),
+      );
   }
 }
 
@@ -100,12 +105,8 @@ export default function Lists() {
     setRefreshing(isPending);
   }, [isPending]);
 
-  if (error) {
-    return <FullPageError error={error.message} onRetry={() => refetch()} />;
-  }
-
   if (!lists) {
-    return <FullPageSpinner />;
+    return <QueryPageState error={error} onRetry={() => refetch()} />;
   }
 
   const onRefresh = () => {
@@ -154,27 +155,31 @@ export default function Lists() {
 
     // Add shared lists as children if section is expanded
     if (showChildrenOf["shared-section"]) {
-      Object.values(lists.root).forEach((list) => {
-        if (list.item.userRole !== "owner") {
-          traverseTree(
-            list,
-            links,
-            showChildrenOf,
-            listStats?.stats,
-            "shared-section",
-            1,
-          );
-        }
-      });
+      Object.values(lists.root)
+        .sort(byName)
+        .forEach((list) => {
+          if (list.item.userRole !== "owner") {
+            traverseTree(
+              list,
+              links,
+              showChildrenOf,
+              listStats?.stats,
+              "shared-section",
+              1,
+            );
+          }
+        });
     }
   }
 
   // Add owned lists only
-  Object.values(lists.root).forEach((list) => {
-    if (list.item.userRole === "owner") {
-      traverseTree(list, links, showChildrenOf, listStats?.stats);
-    }
-  });
+  Object.values(lists.root)
+    .sort(byName)
+    .forEach((list) => {
+      if (list.item.userRole === "owner") {
+        traverseTree(list, links, showChildrenOf, listStats?.stats);
+      }
+    });
 
   return (
     <>
@@ -210,14 +215,11 @@ export default function Lists() {
                       }));
                     }}
                   >
-                    <ChevronRight
-                      color={colors.foreground}
-                      style={{
-                        transform: [
-                          { rotate: l.item.collapsed ? "0deg" : "90deg" },
-                        ],
-                      }}
-                    />
+                    {l.item.collapsed ? (
+                      <ChevronRight color={colors.foreground} />
+                    ) : (
+                      <ChevronDown color={colors.foreground} />
+                    )}
                   </Pressable>
                 )}
               </View>
@@ -262,6 +264,7 @@ export default function Lists() {
           </View>
         )}
         data={links}
+        keyExtractor={(item) => item.id}
         refreshing={refreshing}
         onRefresh={onRefresh}
       />

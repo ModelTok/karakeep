@@ -17,6 +17,8 @@ import { BookmarkTypes } from "@karakeep/shared/types/bookmarks";
 
 import { parseFeedItems } from "./utils/feedParser";
 
+type FeedRunResult = "success" | "failure";
+
 /**
  * Deterministically maps a feed ID to a minute offset within the hour (0-59).
  * This ensures feeds are spread evenly across the hour based on their ID.
@@ -57,50 +59,52 @@ function getErrorMessage(error: unknown): string {
 
 export const FeedRefreshingWorker = cron.schedule(
   "0 * * * *",
-  () => {
+  async () => {
     logger.info("[feed] Scheduling feed refreshing jobs ...");
-    db.query.rssFeedsTable
-      .findMany({
+    try {
+      const feeds = await db.query.rssFeedsTable.findMany({
         columns: {
           id: true,
           userId: true,
         },
         where: eq(rssFeedsTable.enabled, true),
-      })
-      .then((feeds) => {
-        const currentHour = new Date();
-        currentHour.setMinutes(0, 0, 0);
-        const hourlyWindow = currentHour.toISOString();
-        const now = new Date();
-        const currentMinute = now.getMinutes();
-
-        for (const feed of feeds) {
-          const idempotencyKey = `${feed.id}-${hourlyWindow}`;
-          const targetMinute = getFeedMinuteOffset(feed.id);
-
-          // Calculate delay: if target minute has passed, schedule for next hour
-          let delayMinutes = targetMinute - currentMinute;
-          if (delayMinutes < 0) {
-            delayMinutes += 60;
-          }
-          const delayMs = delayMinutes * 60 * 1000;
-
-          logger.debug(
-            `[feed] Scheduling feed ${feed.id} at minute ${targetMinute} (delay: ${delayMinutes} minutes)`,
-          );
-
-          FeedQueue.enqueue(
-            {
-              feedId: feed.id,
-            },
-            {
-              idempotencyKey,
-              groupId: feed.userId,
-              delayMs,
-            },
-          );
-        }
       });
+
+      const currentHour = new Date();
+      currentHour.setMinutes(0, 0, 0);
+      const hourlyWindow = currentHour.toISOString();
+      const now = new Date();
+      const currentMinute = now.getMinutes();
+
+      for (const feed of feeds) {
+        const idempotencyKey = `${feed.id}-${hourlyWindow}`;
+        const targetMinute = getFeedMinuteOffset(feed.id);
+
+        // Calculate delay: if target minute has passed, schedule for next hour
+        let delayMinutes = targetMinute - currentMinute;
+        if (delayMinutes < 0) {
+          delayMinutes += 60;
+        }
+        const delayMs = delayMinutes * 60 * 1000;
+
+        logger.debug(
+          `[feed] Scheduling feed ${feed.id} at minute ${targetMinute} (delay: ${delayMinutes} minutes)`,
+        );
+
+        await FeedQueue.enqueue(
+          {
+            feedId: feed.id,
+          },
+          {
+            idempotencyKey,
+            groupId: feed.userId,
+            delayMs,
+          },
+        );
+      }
+    } catch (error) {
+      logger.error(`[feed] Error scheduling feed refreshing jobs: ${error}`);
+    }
   },
   {
     runOnInit: false,
@@ -111,20 +115,25 @@ export const FeedRefreshingWorker = cron.schedule(
 export class FeedWorker {
   static async build() {
     logger.info("Starting feed worker ...");
-    const worker = (await getQueueClient())!.createRunner<ZFeedRequestSchema>(
+    const worker = (await getQueueClient())!.createRunner<
+      ZFeedRequestSchema,
+      FeedRunResult
+    >(
       FeedQueue,
       {
         run: withWorkerTracing(
           "feedWorker.run",
           withWorkerEventLog("feedWorker.run", run),
         ),
-        onComplete: async (job) => {
+        onComplete: async (job, result) => {
           workerStatsCounter.labels("feed", "completed").inc();
           const jobId = job.id;
-          logger.info(`[feed][${jobId}] Completed successfully`);
+          logger.info(
+            `[feed][${jobId}] Completed with fetch status: ${result}`,
+          );
           await db
             .update(rssFeedsTable)
-            .set({ lastFetchedStatus: "success", lastFetchedAt: new Date() })
+            .set({ lastFetchedStatus: result, lastFetchedAt: new Date() })
             .where(eq(rssFeedsTable.id, job.data?.feedId));
         },
         onError: async (job) => {
@@ -155,7 +164,9 @@ export class FeedWorker {
   }
 }
 
-async function run(req: DequeuedJob<ZFeedRequestSchema>) {
+async function run(
+  req: DequeuedJob<ZFeedRequestSchema>,
+): Promise<FeedRunResult> {
   const jobId = req.id;
   addLogFields<"feedWorker.run">({ "feed.id": req.data.feedId });
   const feed = await db.query.rssFeedsTable.findFirst({
@@ -179,7 +190,7 @@ async function run(req: DequeuedJob<ZFeedRequestSchema>) {
         `[feed][${jobId}] User ${feed.userId} doesn't have enough quota to create bookmarks. Skipping feed fetching.`,
       );
       addLogFields<"feedWorker.run">({ "feed.skipped_quota": true });
-      return;
+      return "success";
     }
   }
 
@@ -187,33 +198,61 @@ async function run(req: DequeuedJob<ZFeedRequestSchema>) {
     `[feed][${jobId}] Starting fetching feed "${feed.name}" (${feed.id}) ...`,
   );
 
-  const response = await fetchWithProxy(feed.url, {
-    signal: AbortSignal.timeout(5000),
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      Accept: "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8",
-    },
-  });
+  let response;
+  try {
+    response = await fetchWithProxy(feed.url, {
+      signal: AbortSignal.timeout(5000),
+      headers: {
+        "User-Agent": "Karakeep-RSS/1.0 (+https://karakeep.app)",
+        Accept: "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8",
+      },
+    });
+  } catch (error) {
+    logger.warn(
+      `[feed][${jobId}] Failed to fetch feed "${feed.name}" (${feed.id}): ${getErrorMessage(error)}. Skipping until the next scheduled fetch.`,
+    );
+    return "failure";
+  }
+
   addLogFields<"feedWorker.run">({ "feed.status_code": response.status });
   if (response.status !== 200) {
-    throw new Error(
-      `[feed][${jobId}] Feed "${feed.name}" (${feed.id}) returned a non-success status: ${response.status}.`,
+    logger.warn(
+      `[feed][${jobId}] Feed "${feed.name}" (${feed.id}) returned a non-success status: ${response.status}. Skipping until the next scheduled fetch.`,
     );
+    return "failure";
   }
   const contentType = response.headers.get("content-type");
   if (!contentType || !contentType.includes("xml")) {
-    throw new Error(
-      `[feed][${jobId}] Feed "${feed.name}" (${feed.id}) is not a valid RSS feed`,
+    logger.warn(
+      `[feed][${jobId}] Feed "${feed.name}" (${feed.id}) is not a valid RSS feed. Skipping until the next scheduled fetch.`,
     );
+    return "failure";
   }
-  const xmlData = await response.text();
+
+  let xmlData;
+  try {
+    xmlData = await response.text();
+  } catch (error) {
+    logger.warn(
+      `[feed][${jobId}] Failed to read feed "${feed.name}" (${feed.id}): ${getErrorMessage(error)}. Skipping until the next scheduled fetch.`,
+    );
+    return "failure";
+  }
 
   logger.info(
     `[feed][${jobId}] Successfully fetched feed "${feed.name}" (${feed.id}) ...`,
   );
 
-  const feedItems = await parseFeedItems(xmlData);
+  let feedItems;
+  try {
+    feedItems = await parseFeedItems(xmlData);
+  } catch (error) {
+    logger.warn(
+      `[feed][${jobId}] Failed to parse feed "${feed.name}" (${feed.id}): ${getErrorMessage(error)}. Skipping until the next scheduled fetch.`,
+    );
+    return "failure";
+  }
+
   addLogFields<"feedWorker.run">({ "feed.items_found": feedItems.length });
   await db
     .update(rssFeedsTable)
@@ -226,7 +265,7 @@ async function run(req: DequeuedJob<ZFeedRequestSchema>) {
 
   if (feedItems.length === 0) {
     logger.info(`[feed][${jobId}] No entries found.`);
-    return;
+    return "success";
   }
 
   const exitingEntries = await db.query.rssFeedImportsTable.findMany({
@@ -251,7 +290,7 @@ async function run(req: DequeuedJob<ZFeedRequestSchema>) {
     logger.info(
       `[feed][${jobId}] No new entries found in feed "${feed.name}" (${feed.id}).`,
     );
-    return;
+    return "success";
   }
 
   logger.info(
@@ -338,5 +377,5 @@ async function run(req: DequeuedJob<ZFeedRequestSchema>) {
     `[feed][${jobId}] Imported ${newEntries.length} feed entries from feed "${feed.name}" (${feed.id}); created ${createdBookmarkCount} bookmarks${bookmarkCreationFailures.length > 0 ? `, failed to create ${bookmarkCreationFailures.length}` : ""}.`,
   );
 
-  return Promise.resolve();
+  return "success";
 }

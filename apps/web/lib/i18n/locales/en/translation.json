@@ -81,6 +81,7 @@
     "edit_tags": "Edit Tags",
     "edit_notes": "Edit Notes",
     "add_to_list": "Add to List",
+    "select": "Select",
     "select_all": "Select All",
     "unselect_all": "Unselect All",
     "copy_link": "Copy Link",
@@ -408,6 +409,10 @@
             "label": "Admin: jobs",
             "description": "Access background job controls."
           },
+          "subscriptions": {
+            "label": "Admin: subscriptions",
+            "description": "Manage user subscription tiers."
+          },
           "system": {
             "label": "Admin: system",
             "description": "Access system status and diagnostics."
@@ -531,7 +536,8 @@
         "running": "Running",
         "paused": "Paused",
         "completed": "Completed",
-        "failed": "Failed"
+        "failed": "Failed",
+        "archived": "Archived"
       },
       "badges": {
         "pending": "{{count}} pending",
@@ -569,6 +575,7 @@
         "result_pending": "Pending",
         "result_processing": "Processing",
         "no_results": "No results found for this filter.",
+        "archived_results": "Individual bookmark results are no longer retained for archived import sessions.",
         "view_bookmark": "View Bookmark",
         "load_more": "Load More",
         "no_title": "No title"
@@ -972,12 +979,26 @@
     "tags": "Tags",
     "lists": "Lists",
     "feeds": "Feeds",
-    "no_suggestions": "No suggestions"
+    "no_suggestions": "No suggestions",
+    "mode_label": "Search mode",
+    "mode_label_description": "Choose how Karakeep finds matching bookmarks.",
+    "mode_keyword": "Keyword",
+    "mode_keyword_description": "Match exact words in titles, content, URLs, and notes. Almost instant.",
+    "mode_hybrid": "Hybrid",
+    "mode_hybrid_description": "Blend exact matches with related ideas for the best balance. Slower than keyword search.",
+    "mode_semantic": "Semantic",
+    "mode_semantic_description": "Find conceptually similar bookmarks, even without shared words. Slower than keyword search.",
+    "keyword_placeholder": "Search titles, text, URLs, and tags…",
+    "hybrid_placeholder": "Search by words or meaning…",
+    "semantic_placeholder": "Describe what you remember…"
   },
   "preview": {
     "view_original": "View Original",
     "cached_content": "Cached Content",
     "reader_view": "Reader View",
+    "page_overview": "Page Overview",
+    "try_reader_view": "Try Reader View",
+    "archived_page": "Archived Page",
     "archive_info": "Archives may not render correctly inline if they require Javascript. For best results, <1>download it and open in your browser</1>.",
     "fetch_error_title": "Content Unavailable",
     "fetch_error_description": "We couldn't fetch the content for this link. The page may be protected, require authentication, or be temporarily unavailable.",

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "a23440dc-2404-47fe-9cf8-583734b0bb1d",
+  "id": "3e2d6b09-5a4e-4ddb-b44b-70ded16e2ae0",
   "prevId": "240f4be9-65f7-4176-9376-fd2daa9b443c",
   "tables": {
     "account": {
@@ -610,16 +610,9 @@
           "autoincrement": false,
           "default": 200
         },
-        "transcript": {
-          "name": "transcript",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "transcriptionStatus": {
-          "name": "transcriptionStatus",
-          "type": "text",
+        "probeMetadataAt": {
+          "name": "probeMetadataAt",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

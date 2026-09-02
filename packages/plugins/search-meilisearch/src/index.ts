@@ -148,9 +148,15 @@ export class MeiliSearchProvider implements PluginProvider<SearchIndexClient> {
     }
 
     this.initPromise = this.initClient();
-    const client = await this.initPromise;
-    this.initPromise = undefined;
-    return client;
+    try {
+      return await this.initPromise;
+    } finally {
+      // Always clear the in-flight promise, including when init rejected.
+      // Otherwise a transient failure (e.g. meilisearch restarting) would be
+      // cached as a permanently rejected promise and every later call would
+      // replay it for the lifetime of the process.
+      this.initPromise = undefined;
+    }
   }
 
   private async initClient(): Promise<SearchIndexClient | null> {

@@ -19,6 +19,18 @@ Karakeep supports being a destination for the [SingleFile extension](https://git
 
 Now, go to any page and click the singlefile extension icon. Once it's done with the upload, the bookmark should show up in your karakeep instance. Note that the singlefile extension doesn't show any progress on the upload. Given that archives are typically large, it might take 30+ seconds until the upload is done and starts showing up in Karakeep.
 
+## Importing an existing archive with the CLI
+
+If you already have a SingleFile HTML archive, import it by passing both the
+archive path and the original page URL:
+
+```bash
+karakeep bookmarks import-singlefile page.html --url "https://example.com/page"
+```
+
+Use `--if-exists MODE` to control how an existing bookmark for the same URL is
+handled. The supported modes are described below.
+
 ## Handling Existing Bookmarks
 
 When uploading a page that already exists in your archive (same URL), you can control the behavior by setting the `ifexists` query parameter in the upload URL. The available modes are:
@@ -47,4 +59,3 @@ Also, you most likely will want to change the default `MAX_ASSET_SIZE_MB` in kar
 :::info
 Currently, we don't support screenshots for singlefile uploads, but this will change in the future.
 :::
-

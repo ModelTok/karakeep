@@ -19,7 +19,7 @@ import {
   users,
   verificationTokens,
 } from "@karakeep/db/schema";
-import { deleteAsset, deleteUserAssets } from "@karakeep/shared/assetdb";
+import { deleteAsset, deleteUserAssets } from "@karakeep/shared-server";
 import serverConfig from "@karakeep/shared/config";
 import {
   zResetPasswordSchema,
@@ -102,46 +102,53 @@ export class User {
       emailVerified?: Date | null;
     },
   ) {
-    return await db.transaction(async (trx) => {
-      let userRole = input.role;
-      if (!userRole) {
-        const [{ count: userCount }] = await trx
-          .select({ count: count() })
-          .from(users);
-        userRole = userCount === 0 ? "admin" : "user";
-      }
-
-      try {
-        const [result] = await trx
-          .insert(users)
-          .values({
-            name: input.name,
-            email: input.email,
-            password: input.password,
-            salt: input.salt,
-            role: userRole,
-            emailVerified: input.emailVerified,
-            bookmarkQuota: serverConfig.quotas.free.bookmarkLimit,
-            storageQuota: serverConfig.quotas.free.assetSizeBytes,
-          })
-          .returning();
-
-        return result;
-      } catch (e) {
-        if (e instanceof SqliteError) {
-          if (e.code === "SQLITE_CONSTRAINT_UNIQUE") {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "Email is already taken",
-            });
-          }
+    // This transaction reads before writing, so reserve the writer slot before
+    // taking a WAL snapshot that another connection could invalidate.
+    return await db.transaction(
+      (trx) => {
+        let userRole = input.role;
+        if (!userRole) {
+          const [{ count: userCount }] = trx
+            .select({ count: count() })
+            .from(users)
+            .all();
+          userRole = userCount === 0 ? "admin" : "user";
         }
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Something went wrong",
-        });
-      }
-    });
+
+        try {
+          const [result] = trx
+            .insert(users)
+            .values({
+              name: input.name,
+              email: input.email,
+              password: input.password,
+              salt: input.salt,
+              role: userRole,
+              emailVerified: input.emailVerified,
+              bookmarkQuota: serverConfig.quotas.free.bookmarkLimit,
+              storageQuota: serverConfig.quotas.free.assetSizeBytes,
+            })
+            .returning()
+            .all();
+
+          return result;
+        } catch (e) {
+          if (e instanceof SqliteError) {
+            if (e.code === "SQLITE_CONSTRAINT_UNIQUE") {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "Email is already taken",
+              });
+            }
+          }
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Something went wrong",
+          });
+        }
+      },
+      { behavior: "immediate" },
+    );
   }
 
   static async getAll(ctx: AuthedContext): Promise<User[]> {
@@ -292,22 +299,31 @@ export class User {
       const token = randomBytes(32).toString("hex");
       const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-      await ctx.db.transaction(async (tx) => {
+      await ctx.db.transaction((tx) => {
         // Invalidate any existing reset tokens for this user
-        await tx
-          .delete(passwordResetTokens)
-          .where(eq(passwordResetTokens.userId, user.id));
+        tx.delete(passwordResetTokens)
+          .where(eq(passwordResetTokens.userId, user.id))
+          .run();
 
-        await tx.insert(passwordResetTokens).values({
-          userId: user.id,
-          token,
-          expires,
-        });
+        tx.insert(passwordResetTokens)
+          .values({
+            userId: user.id,
+            token,
+            expires,
+          })
+          .run();
       });
 
-      await sendPasswordResetEmail(email, user.name, token);
+      // Deliberately not awaited. Delivery latency is only incurred for real
+      // accounts, so awaiting it makes this endpoint a timing oracle for which
+      // emails are registered -- and a hard oracle whenever SMTP is unhealthy,
+      // since only real accounts could reach the throw below (500 for a user
+      // that exists, 200 for one that doesn't).
+      void sendPasswordResetEmail(email, user.name, token).catch((error) => {
+        console.error("Failed to send password reset email:", error);
+      });
     } catch (error) {
-      console.error("Failed to send password reset email:", error);
+      console.error("Failed to create password reset token:", error);
       throw new TRPCError({
         code: "INTERNAL_SERVER_ERROR",
         message: "Failed to send password reset email",
@@ -615,18 +631,18 @@ export class User {
       return;
     }
 
-    await this.ctx.db.transaction(async (tx) => {
-      await tx
-        .update(users)
+    await this.ctx.db.transaction((tx) => {
+      tx.update(users)
         .set({ image: assetId })
-        .where(eq(users.id, this.user.id));
+        .where(eq(users.id, this.user.id))
+        .run();
 
       if (!previousImage || previousImage === assetId) {
         return;
       }
 
       if (previousAsset && !previousAsset.bookmarkId) {
-        await tx.delete(assets).where(eq(assets.id, previousAsset.id));
+        tx.delete(assets).where(eq(assets.id, previousAsset.id)).run();
       }
     });
 

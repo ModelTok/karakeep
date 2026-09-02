@@ -9,6 +9,7 @@ import NextAuth, {
 import { Adapter as NextAuthAdapater } from "next-auth/adapters";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { Provider } from "next-auth/providers/index";
+import requestIp from "request-ip";
 
 import { db } from "@karakeep/db";
 import {
@@ -18,6 +19,8 @@ import {
   verificationTokens,
 } from "@karakeep/db/schema";
 import serverConfig from "@karakeep/shared/config";
+import { getRateLimitClient } from "@karakeep/shared/ratelimiting";
+import { getReadOnlyModeError } from "@karakeep/shared/readOnlyMode";
 import {
   containsUnsafeUserNameMarkup,
   normalizeUserNameInput,
@@ -93,9 +96,17 @@ const CustomProvider = (): Adapter => {
     verificationTokensTable: verificationTokens,
   });
 
+  const assertWritesAllowed = () => {
+    const message = getReadOnlyModeError(serverConfig);
+    if (message) {
+      throw new Error(message);
+    }
+  };
+
   return {
     ...adapter,
     createUser: async (user: Omit<AdapterUser, "id">) => {
+      assertWritesAllowed();
       const created = await User.createRaw(db, {
         name: normalizeSafeDisplayName(user.name),
         email: user.email,
@@ -108,6 +119,10 @@ const CustomProvider = (): Adapter => {
       });
       return created;
     },
+    linkAccount: async (account) => {
+      assertWritesAllowed();
+      await adapter.linkAccount?.(account);
+    },
   };
 };
 
@@ -119,9 +134,28 @@ const providers: Provider[] = [
       email: { label: "Email", type: "email", placeholder: "Email" },
       password: { label: "Password", type: "password" },
     },
-    async authorize(credentials) {
+    async authorize(credentials, req) {
       if (!credentials) {
         return null;
+      }
+
+      if (serverConfig.rateLimiting.enabled) {
+        const ip = requestIp.getClientIp({ headers: req?.headers ?? {} });
+        const client = ip ? await getRateLimitClient() : null;
+        if (client) {
+          const result = await client.checkRateLimit(
+            { name: "auth.login", windowMs: 15 * 60 * 1000, maxRequests: 10 },
+            `login:${ip}:${credentials.email.toLowerCase()}`,
+          );
+          if (!result.allowed) {
+            logEvent({
+              "event.name": "user.login_failed",
+              "user.email": credentials.email,
+              "auth.failure_reason": "rate_limited",
+            });
+            throw new Error("Too many login attempts. Please try again later.");
+          }
+        }
       }
 
       try {
@@ -153,6 +187,13 @@ if (oauth.wellKnownUrl) {
     authorization: { params: { scope: oauth.scope } },
     clientId: oauth.clientId,
     clientSecret: oauth.clientSecret,
+    ...(oauth.idTokenSignedResponseAlg
+      ? {
+          client: {
+            id_token_signed_response_alg: oauth.idTokenSignedResponseAlg,
+          },
+        }
+      : {}),
     allowDangerousEmailAccountLinking: oauth.allowDangerousEmailAccountLinking,
     checks: ["pkce", "state"],
     httpOptions: {

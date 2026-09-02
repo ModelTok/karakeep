@@ -2,11 +2,13 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
 
+import { getAlignedExpiry } from "@karakeep/shared/signedTokens";
 import { Asset } from "@karakeep/trpc/models/assets";
 
 import { apiKeyScopeMiddleware } from "../middlewares/apiKeyScopes";
 import { authMiddleware } from "../middlewares/auth";
 import { createRateLimitMiddleware } from "../middlewares/rateLimit";
+import { rejectMutationInReadOnlyMode } from "../middlewares/readOnlyMode";
 import { serveAsset } from "../utils/assets";
 import { uploadAsset } from "../utils/upload";
 
@@ -14,6 +16,7 @@ const app = new Hono()
   .use(authMiddleware)
   .post(
     "/",
+    rejectMutationInReadOnlyMode,
     apiKeyScopeMiddleware("assets", "readwrite"),
     createRateLimitMiddleware({
       name: "assets.upload",
@@ -37,6 +40,25 @@ const app = new Hono()
         contentType: up.contentType,
         size: up.size,
         fileName: up.fileName,
+      });
+    },
+  )
+  .get(
+    "/:assetId/signed-url",
+    apiKeyScopeMiddleware("assets", "read"),
+    async (c) => {
+      const assetId = c.req.param("assetId");
+      const asset = await Asset.fromId(c.var.ctx, assetId);
+      const expiresAt = getAlignedExpiry(3600, 900);
+
+      return c.json({
+        assetId,
+        signedUrl: Asset.getPublicSignedAssetUrl(
+          assetId,
+          asset.asset.userId,
+          expiresAt,
+        ),
+        expiresAt: new Date(expiresAt).toISOString(),
       });
     },
   )

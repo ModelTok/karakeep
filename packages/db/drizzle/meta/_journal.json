@@ -607,15 +607,71 @@
     {
       "idx": 86,
       "version": "6",
-      "when": 1785166586927,
-      "tag": "0086_add_video_transcript",
+      "when": 1783262454462,
+      "tag": "0086_bookmark_links_probe_metadata_at",
       "breakpoints": true
     },
     {
       "idx": 87,
       "version": "6",
-      "when": 1785835329712,
-      "tag": "0087_add_digest_enabled",
+      "when": 1783868937511,
+      "tag": "0087_missing_bookmark_fk_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "6",
+      "when": 1783874446162,
+      "tag": "0088_add_chat_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "6",
+      "when": 1784178098346,
+      "tag": "0089_add_manual_tier_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "6",
+      "when": 1784366502271,
+      "tag": "0090_archive_import_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "6",
+      "when": 1784396536240,
+      "tag": "0091_remove_redundant_indicies",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "6",
+      "when": 1785067924780,
+      "tag": "0092_add_last_saved_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "6",
+      "when": 1785586065846,
+      "tag": "0093_reader_view_assessment",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "6",
+      "when": 1785586065847,
+      "tag": "0094_add_video_transcript",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "6",
+      "when": 1785586065848,
+      "tag": "0095_add_digest_enabled",
       "breakpoints": true
     }
   ]
