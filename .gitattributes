@@ -1,0 +1,4 @@
+# s6-overlay service scripts MUST be LF — s6-rc-compile rejects CRLF.
+docker/root/etc/s6-overlay/** text eol=lf
+# Docker entrypoints/scripts need LF too.
+*.sh text eol=lf
