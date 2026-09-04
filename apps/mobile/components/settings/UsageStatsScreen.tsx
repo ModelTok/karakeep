@@ -26,6 +26,7 @@ import {
   Image as ImageIcon,
   Link2,
   List,
+  Newspaper,
   Rss,
   Smartphone,
   Upload,
@@ -63,6 +64,7 @@ const SOURCE_DETAILS: Record<
   singlefile: { label: "SingleFile", icon: FileText },
   rss: { label: "RSS feed", icon: Rss },
   import: { label: "Import", icon: Upload },
+  digest: { label: "Digest", icon: Newspaper },
 };
 
 function formatNumber(value: number) {

@@ -109,16 +109,14 @@ const workerBuilders = {
     return BackupWorker.build();
   },
   transcription: async () => {
-    const { TranscriptionWorker } = await import(
-      "./workers/transcriptionWorker"
-    );
+    const { TranscriptionWorker } =
+      await import("./workers/transcriptionWorker");
     await TranscriptionQueue.ensureInit();
     return TranscriptionWorker.build();
   },
   digest: async () => {
-    const { DigestSchedulingWorker, DigestWorker } = await import(
-      "./workers/digestWorker"
-    );
+    const { DigestSchedulingWorker, DigestWorker } =
+      await import("./workers/digestWorker");
     digestSchedulingWorker = DigestSchedulingWorker;
     await DigestQueue.ensureInit();
     return DigestWorker.build();

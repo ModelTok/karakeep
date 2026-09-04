@@ -10,5 +10,10 @@ export default defineConfig({
     alias: {
       "@/*": "./*",
     },
+    // Date formatting tests assert UTC renderings; without this the suite
+    // fails on any machine east of UTC (Intl uses the OS timezone).
+    env: {
+      TZ: "UTC",
+    },
   },
 });

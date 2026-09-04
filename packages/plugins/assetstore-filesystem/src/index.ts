@@ -195,7 +195,10 @@ export class LocalFileSystemAssetStore implements AssetStore {
       absolute: false,
     });
     for await (const file of assets) {
-      const [userId, assetId] = file.split("/").slice(0, 2);
+      // Glob returns OS-native separators; split on both so this works on
+      // Windows too ("user\\asset\\asset.bin" must not collapse into one
+      // element, which would make assetId undefined).
+      const [userId, assetId] = file.split(/[\\/]/).slice(0, 2);
       const [size, metadata] = await Promise.all([
         this.getAssetSize({ userId, assetId }),
         this.readAssetMetadata({ userId, assetId }),

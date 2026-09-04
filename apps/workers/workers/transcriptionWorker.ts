@@ -8,12 +8,12 @@ import {
   addLogFields,
   EmbeddingsQueue,
   OpenAIQueue,
+  readAsset,
   triggerSearchReindex,
   TranscriptionQueue,
   ZTranscriptionRequest,
   ztranscriptionRequestSchema,
 } from "@karakeep/shared-server";
-import { readAsset } from "@karakeep/shared/assetdb";
 import serverConfig from "@karakeep/shared/config";
 import logger from "@karakeep/shared/logger";
 import {

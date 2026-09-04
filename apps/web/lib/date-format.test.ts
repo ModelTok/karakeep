@@ -19,13 +19,17 @@ describe("formatLocalDate", () => {
 
   it("lets Intl fall back for structurally valid but unsupported locales", () => {
     expect(() => formatLocalDate(date, "PPP", "zz-ZZ")).not.toThrow();
-    expect(formatLocalDate(date, "PPP", "zz-ZZ")).toBe("January 5, 2025");
+    // The runtime locale is OS-dependent, so assert against what Intl itself
+    // produces for the default locale rather than a hardcoded string.
+    expect(formatLocalDate(date, "PPP", "zz-ZZ")).toBe(
+      new Intl.DateTimeFormat(undefined, { dateStyle: "long" }).format(date),
+    );
   });
 
   it("falls back to the runtime locale for malformed locale tags", () => {
     expect(() => formatLocalDate(date, "PPP", "not_a_locale")).not.toThrow();
     expect(formatLocalDate(date, "PPP", "not_a_locale")).toBe(
-      "January 5, 2025",
+      new Intl.DateTimeFormat(undefined, { dateStyle: "long" }).format(date),
     );
   });
 });
