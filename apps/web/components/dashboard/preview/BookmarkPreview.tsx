@@ -49,6 +49,14 @@ import LinkContentSection from "./LinkContentSection";
 import { NoteEditor } from "./NoteEditor";
 import { TextContentSection } from "./TextContentSection";
 
+// A preview opened cold (direct URL, shared link, browser history, reader
+// view) may point at a bookmark that sits deeper than the first loaded page
+// of its list, leaving j/k with no context. We walk the list forward until
+// the bookmark turns up, but cap the crawl so a bookmark that genuinely
+// isn't in the list (e.g. archived) can't page through the whole library.
+// 25 pages * DEFAULT_NUM_BOOKMARKS_PER_PAGE (20) = 500 bookmarks.
+const MAX_CONTEXT_LOOKUP_PAGES = 25;
+
 function ContentLoading() {
   const { t } = useTranslation();
   return (
@@ -185,6 +193,28 @@ export default function BookmarkPreview({
   const atEndOfLoadedList =
     hasListContext && currentIndex === bookmarkIds.length - 1;
   const canLoadMore = atEndOfLoadedList && !!hasNextPage && !isFetchingNextPage;
+
+  // The bookmark isn't in the pages loaded so far: keep pulling pages (up to
+  // the cap) until it appears, so j/k and the position counter light up even
+  // when the preview was opened without a list context or from deep in a
+  // filtered grid. Stops as soon as currentIndex resolves.
+  const loadedPages = listData?.pages.length ?? 0;
+  useEffect(() => {
+    if (
+      !hasListContext &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      loadedPages < MAX_CONTEXT_LOOKUP_PAGES
+    ) {
+      void fetchNextPage();
+    }
+  }, [
+    hasListContext,
+    hasNextPage,
+    isFetchingNextPage,
+    loadedPages,
+    fetchNextPage,
+  ]);
 
   // Used only by the j/k hotkeys below to step through the list without
   // growing browser history: the preview modal is closed via router.back()
