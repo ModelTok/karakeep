@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { BookmarkTagsEditor } from "@/components/dashboard/bookmarks/BookmarkTagsEditor";
 import { FullPageSpinner } from "@/components/ui/full-page-spinner";
 import { Separator } from "@/components/ui/separator";
@@ -15,7 +16,8 @@ import {
 import { useSession } from "@/lib/auth/client";
 import useRelativeTime from "@/lib/hooks/relative-time";
 import { useTranslation } from "@/lib/i18n/client";
-import { useQuery } from "@tanstack/react-query";
+import { useKeyboardNavigationStore } from "@/lib/store/useKeyboardNavigationStore";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   Building,
   CalendarDays,
@@ -25,8 +27,10 @@ import {
   PanelRightOpen,
   User,
 } from "lucide-react";
+import { useHotkeys } from "react-hotkeys-hook";
 
 import { useTRPC } from "@karakeep/shared-react/trpc";
+import type { ZGetBookmarksRequest } from "@karakeep/shared/types/bookmarks";
 import { BookmarkTypes, ZBookmark } from "@karakeep/shared/types/bookmarks";
 import {
   getBookmarkRefreshInterval,
@@ -36,6 +40,7 @@ import {
 } from "@karakeep/shared/utils/bookmarkUtils";
 
 import SummarizeBookmarkArea from "../bookmarks/SummarizeBookmarkArea";
+import DeleteBookmarkConfirmationDialog from "../bookmarks/DeleteBookmarkConfirmationDialog";
 import ActionBar from "./ActionBar";
 import { AssetContentSection } from "./AssetContentSection";
 import AttachmentBox from "./AttachmentBox";
@@ -43,6 +48,14 @@ import HighlightsBox from "./HighlightsBox";
 import LinkContentSection from "./LinkContentSection";
 import { NoteEditor } from "./NoteEditor";
 import { TextContentSection } from "./TextContentSection";
+
+// A preview opened cold (direct URL, shared link, browser history, reader
+// view) may point at a bookmark that sits deeper than the first loaded page
+// of its list, leaving j/k with no context. We walk the list forward until
+// the bookmark turns up, but cap the crawl so a bookmark that genuinely
+// isn't in the list (e.g. archived) can't page through the whole library.
+// 25 pages * DEFAULT_NUM_BOOKMARKS_PER_PAGE (20) = 500 bookmarks.
+const MAX_CONTEXT_LOOKUP_PAGES = 25;
 
 function ContentLoading() {
   const { t } = useTranslation();
@@ -137,6 +150,145 @@ export default function BookmarkPreview({
   const [activeTab, setActiveTab] = useState<string>("content");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { data: session } = useSession();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const listQueryParam = searchParams.get("listQuery");
+
+  let listQuery: ZGetBookmarksRequest | null = null;
+  if (listQueryParam) {
+    try {
+      listQuery = JSON.parse(listQueryParam) as ZGetBookmarksRequest;
+    } catch {
+      listQuery = null;
+    }
+  }
+
+  const {
+    data: listData,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery(
+    api.bookmarks.getBookmarks.infiniteQueryOptions(
+      { ...listQuery, useCursorV2: true },
+      {
+        initialCursor: null,
+        getNextPageParam: (lastPage) => lastPage.nextCursor,
+      },
+    ),
+  );
+
+  const bookmarkIds =
+    listData?.pages.flatMap((page) => page.bookmarks.map((b) => b.id)) ?? [];
+  const currentIndex = bookmarkIds.indexOf(bookmarkId);
+  const hasListContext = currentIndex !== -1;
+  const prevId =
+    hasListContext && currentIndex > 0 ? bookmarkIds[currentIndex - 1] : null;
+  const nextId =
+    hasListContext && currentIndex < bookmarkIds.length - 1
+      ? bookmarkIds[currentIndex + 1]
+      : null;
+  // j at the end of the loaded pages: pull the next page so the user can
+  // keep going with another j, instead of dead-ending at page size.
+  const atEndOfLoadedList =
+    hasListContext && currentIndex === bookmarkIds.length - 1;
+  const canLoadMore = atEndOfLoadedList && !!hasNextPage && !isFetchingNextPage;
+
+  // The bookmark isn't in the pages loaded so far: keep pulling pages (up to
+  // the cap) until it appears, so j/k and the position counter light up even
+  // when the preview was opened without a list context or from deep in a
+  // filtered grid. Stops as soon as currentIndex resolves.
+  const loadedPages = listData?.pages.length ?? 0;
+  useEffect(() => {
+    if (
+      !hasListContext &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      loadedPages < MAX_CONTEXT_LOOKUP_PAGES
+    ) {
+      void fetchNextPage();
+    }
+  }, [
+    hasListContext,
+    hasNextPage,
+    isFetchingNextPage,
+    loadedPages,
+    fetchNextPage,
+  ]);
+
+  // Used only by the j/k hotkeys below to step through the list without
+  // growing browser history: the preview modal is closed via router.back()
+  // (see app/dashboard/@modal/(.)preview/[bookmarkId]/page.tsx), so a push
+  // per keystroke would make Escape/back step through each visited
+  // bookmark instead of returning straight to the list.
+  //
+  // When the preview was opened without an explicit list context, the
+  // default bookmarks list (desc, first page) is used as a fallback so
+  // j/k still work; the fallback context is preserved on navigation (no
+  // listQuery param is added, the fallback is re-derived next render).
+  const navigateTo = (id: string) => {
+    const queryPart = listQueryParam
+      ? `?listQuery=${encodeURIComponent(listQueryParam)}`
+      : "";
+    router.replace(`/dashboard/preview/${id}${queryPart}`);
+  };
+
+  const setIsPreviewModalOpen = useKeyboardNavigationStore(
+    (state) => state.setIsPreviewModalOpen,
+  );
+
+  useEffect(() => {
+    setIsPreviewModalOpen(true);
+    return () => {
+      setIsPreviewModalOpen(false);
+    };
+  }, [setIsPreviewModalOpen]);
+
+  const nextHandler = () => {
+    if (nextId) {
+      navigateTo(nextId);
+    } else if (canLoadMore) {
+      fetchNextPage();
+    }
+  };
+
+  useHotkeys(
+    "j",
+    nextHandler,
+    { enabled: !!nextId || canLoadMore, preventDefault: true },
+    [nextId, canLoadMore],
+  );
+  useHotkeys(
+    "k",
+    () => {
+      if (prevId) navigateTo(prevId);
+    },
+    { enabled: !!prevId, preventDefault: true },
+    [prevId],
+  );
+
+  // Alt+j / Alt+k step through the list even while the note editor (or any
+  // other form control) has focus: react-hotkeys-hook disables plain j/k on
+  // form tags by default so typing a note isn't hijacked, but the Alt
+  // modifier can't be typed as note text, so these are safe to enable there.
+  useHotkeys(
+    "alt+j",
+    nextHandler,
+    {
+      enabled: !!nextId || canLoadMore,
+      preventDefault: true,
+      enableOnFormTags: true,
+    },
+    [nextId, canLoadMore],
+  );
+  useHotkeys(
+    "alt+k",
+    () => {
+      if (prevId) navigateTo(prevId);
+    },
+    { enabled: !!prevId, preventDefault: true, enableOnFormTags: true },
+    [prevId],
+  );
 
   const { data: bookmark } = useQuery(
     api.bookmarks.getBookmark.queryOptions(
@@ -156,12 +308,24 @@ export default function BookmarkPreview({
     ),
   );
 
+  // Check if the current user owns this bookmark
+  const isOwner = bookmark ? session?.user?.id === bookmark.userId : false;
+
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+
+  // Delete/Backspace opens the delete confirmation dialog. Plain Delete is
+  // intentionally NOT enabled on form tags: while the note editor is
+  // focused, Delete edits the note text instead of deleting the bookmark.
+  useHotkeys(
+    "delete,backspace",
+    () => setDeleteDialogOpen(true),
+    { enabled: isOwner && !deleteDialogOpen, preventDefault: true },
+    [isOwner, deleteDialogOpen],
+  );
+
   if (!bookmark) {
     return <FullPageSpinner />;
   }
-
-  // Check if the current user owns this bookmark
-  const isOwner = session?.user?.id === bookmark.userId;
 
   let content;
   switch (bookmark.content.type) {
@@ -227,12 +391,33 @@ export default function BookmarkPreview({
       <AttachmentBox bookmark={bookmark} readOnly={!isOwner} />
       <HighlightsBox bookmarkId={bookmark.id} readOnly={!isOwner} />
       <Separator />
-      {isOwner && <ActionBar bookmark={bookmark} />}
+      <div className="flex items-center justify-between gap-2">
+        {isOwner && (
+          <ActionBar
+            bookmark={bookmark}
+            setDeleteDialogOpen={setDeleteDialogOpen}
+          />
+        )}
+        {hasListContext && (
+          <span className="text-sm text-muted-foreground">
+            {currentIndex + 1}/{bookmarkIds.length}
+          </span>
+        )}
+      </div>
     </div>
   );
 
   return (
     <>
+      {/* Rendered at the root (not in the collapsible sidebar) so the
+          confirmation dialog stays reachable even with the sidebar hidden. */}
+      {isOwner && (
+        <DeleteBookmarkConfirmationDialog
+          bookmark={bookmark}
+          open={deleteDialogOpen}
+          setOpen={setDeleteDialogOpen}
+        />
+      )}
       {/* Render original layout for wide screens */}
       <div className="hidden h-full flex-col overflow-hidden bg-background lg:flex">
         <div className="flex min-h-0 flex-1">

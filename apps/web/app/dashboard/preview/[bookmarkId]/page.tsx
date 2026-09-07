@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import BookmarkPreview from "@/components/dashboard/preview/BookmarkPreview";
+import { FullPagePreview } from "@/components/dashboard/preview/FullPagePreview";
 import { api } from "@/server/api/client";
 import { TRPCError } from "@trpc/server";
 
@@ -23,7 +23,7 @@ export default async function BookmarkPreviewPage(props: {
 
   return (
     <div className="h-[calc(100dvh-theme(spacing.16)-theme(spacing.8))] overflow-hidden">
-      <BookmarkPreview bookmarkId={bookmark.id} initialData={bookmark} />
+      <FullPagePreview bookmarkId={bookmark.id} initialData={bookmark} />
     </div>
   );
 }

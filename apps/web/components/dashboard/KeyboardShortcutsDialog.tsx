@@ -82,11 +82,11 @@ export default function KeyboardShortcutsDialog({
           : []),
         {
           keys: ["j", "↓"],
-          description: t("keyboard_shortcuts.move_down"),
+          description: `${t("keyboard_shortcuts.move_down")} (grid) / (preview: next item)`,
         },
         {
           keys: ["k", "↑"],
-          description: t("keyboard_shortcuts.move_up"),
+          description: `${t("keyboard_shortcuts.move_up")} (grid) / (preview: prev item)`,
         },
         ...(hasHorizontalNavigation
           ? [

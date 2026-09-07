@@ -12,6 +12,7 @@ export const zUserLocalSettings = z.object({
   showNotes: z.boolean().optional().default(false),
   showTags: z.boolean().optional().default(true),
   showTitle: z.boolean().optional().default(true),
+  showSummary: z.boolean().optional().default(false),
   imageFit: z.enum(["cover", "contain"]).optional().default("cover"),
 });
 

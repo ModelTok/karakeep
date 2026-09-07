@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { ActionButton } from "@/components/ui/action-button";
 import FormattedDate from "@/components/ui/formatted-date";
@@ -32,6 +32,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useForm } from "react-hook-form";
+import { useHotkeys } from "react-hotkeys-hook";
 import { z } from "zod";
 
 import { useTRPC } from "@karakeep/shared-react/trpc";
@@ -349,6 +350,17 @@ export function FeedRow({ feed }: { feed: ZFeed }) {
   const api = useTRPC();
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  // Focus the row (click or Tab) and press Delete/Backspace to open the
+  // delete confirmation dialog - the rows have no other keyboard access.
+  const [rowFocused, setRowFocused] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+
+  useHotkeys(
+    "delete,backspace",
+    () => setDeleteDialogOpen(true),
+    { enabled: rowFocused, preventDefault: true },
+    [rowFocused],
+  );
   const { mutate: deleteFeed, isPending: isDeleting } = useMutation(
     api.feeds.delete.mutationOptions({
       onSuccess: () => {
@@ -395,7 +407,12 @@ export function FeedRow({ feed }: { feed: ZFeed }) {
   };
 
   return (
-    <TableRow>
+    <TableRow
+      tabIndex={0}
+      onFocus={() => setRowFocused(true)}
+      onBlur={() => setRowFocused(false)}
+      className="focus-visible:bg-muted focus-visible:outline-none"
+    >
       <TableCell>
         <Link
           href={`/dashboard/feeds/${feed.id}`}
@@ -447,6 +464,8 @@ export function FeedRow({ feed }: { feed: ZFeed }) {
         <ActionConfirmingDialog
           title={`Delete Feed "${feed.name}"?`}
           description={`Are you sure you want to delete the feed "${feed.name}"?`}
+          open={deleteDialogOpen}
+          setOpen={setDeleteDialogOpen}
           actionButton={() => (
             <ActionButton
               loading={isDeleting}

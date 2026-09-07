@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useUserSettings } from "@/lib/userSettings";
 
+import { useBookmarkGridContext } from "@karakeep/shared-react/hooks/bookmark-grid-context";
 import type { ZBookmarkTypeLink } from "@karakeep/shared/types/bookmarks";
 import {
   getBookmarkLinkImageUrl,
@@ -17,6 +18,10 @@ import FooterLinkURL from "./FooterLinkURL";
 
 const useOnClickUrl = (bookmark: ZBookmarkTypeLink) => {
   const userSettings = useUserSettings();
+  const gridQuery = useBookmarkGridContext();
+  const previewUrl = gridQuery
+    ? `/dashboard/preview/${bookmark.id}?listQuery=${encodeURIComponent(JSON.stringify(gridQuery))}`
+    : `/dashboard/preview/${bookmark.id}`;
   return {
     urlTarget:
       userSettings.bookmarkClickAction === "open_original_link"
@@ -24,7 +29,7 @@ const useOnClickUrl = (bookmark: ZBookmarkTypeLink) => {
         : ("_self" as const),
     onClickUrl:
       userSettings.bookmarkClickAction === "expand_bookmark_preview"
-        ? `/dashboard/preview/${bookmark.id}`
+        ? previewUrl
         : bookmark.content.url,
   };
 };

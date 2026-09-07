@@ -9,6 +9,7 @@ import { useKeyboardNavigationStore } from "@/lib/store/useKeyboardNavigationSto
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 
+import { useBookmarkGridContext } from "@karakeep/shared-react/hooks/bookmark-grid-context";
 import type { ZBookmark } from "@karakeep/shared/types/bookmarks";
 
 import { useTranslation } from "../i18n/client";
@@ -345,15 +346,19 @@ function useBookmarkOpenHotkeys({
   withFocusedBookmark: (action: (bookmark: ZBookmark) => void) => void;
 }) {
   const router = useRouter();
+  const gridQuery = useBookmarkGridContext();
 
   useHotkeys(
     "o,enter",
     () =>
-      withFocusedBookmark((bookmark) =>
-        router.push(`/dashboard/preview/${bookmark.id}`),
-      ),
+      withFocusedBookmark((bookmark) => {
+        const url = gridQuery
+          ? `/dashboard/preview/${bookmark.id}?listQuery=${encodeURIComponent(JSON.stringify(gridQuery))}`
+          : `/dashboard/preview/${bookmark.id}`;
+        router.push(url);
+      }),
     { enabled: !disabled && isNavigating, preventDefault: true },
-    [disabled, isNavigating, router, withFocusedBookmark],
+    [disabled, gridQuery, isNavigating, router, withFocusedBookmark],
   );
 }
 
@@ -615,8 +620,12 @@ export function useBookmarkKeyboardNavigation({
   const shortcutsDialogOpen = useKeyboardNavigationStore(
     (state) => state.shortcutsDialogOpen,
   );
+  const isPreviewModalOpen = useKeyboardNavigationStore(
+    (state) => state.isPreviewModalOpen,
+  );
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const disabled = shortcutsDialogOpen || deleteDialogOpen;
+  const disabled =
+    shortcutsDialogOpen || deleteDialogOpen || isPreviewModalOpen;
   const hasBookmarks = bookmarks.length > 0;
   const canMutateBookmark = useBookmarkOwnership();
   const bulkActionsStore = useBulkActionsStore();

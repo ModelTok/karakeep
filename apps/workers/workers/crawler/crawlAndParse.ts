@@ -50,6 +50,11 @@ import {
 import { crawlPage } from "./crawlPage";
 import { runParseSubprocess } from "./parseSubprocess";
 import { redactUrlCredentials, shouldRetryCrawlStatusCode } from "./utils";
+import {
+  fetchYoutubeTranscript,
+  isYoutubeVideoUrl,
+  toSafeTranscriptHtml,
+} from "./youtubeTranscript";
 
 const tracer = getTracer("@karakeep/workers");
 
@@ -351,6 +356,24 @@ export async function crawlAndParseUrl(
         .where(eq(bookmarkLinks.id, bookmarkId));
 
       let readableContent = parsedReadableContent;
+
+      if (isYoutubeVideoUrl(url)) {
+        const transcript = await fetchYoutubeTranscript(url, jobId);
+        if (transcript && readableContent) {
+          readableContent = {
+            ...readableContent,
+            content: `${readableContent.content}\n\n${toSafeTranscriptHtml(transcript)}`,
+          };
+          logger.info(
+            `[Crawler][${jobId}] Injected YouTube transcript (${transcript.length} chars) into readable content.`,
+          );
+        } else if (!transcript) {
+          logger.info(
+            `[Crawler][${jobId}] No YouTube captions available for "${url}".`,
+          );
+        }
+        abortSignal.throwIfAborted();
+      }
 
       const screenshotAssetInfo = await raceWith(
         storeScreenshot(screenshot, userId, jobId),
