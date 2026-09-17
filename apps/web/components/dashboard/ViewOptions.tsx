@@ -29,6 +29,7 @@ import {
   updateGridColumns,
   updateImageFit,
   updateShowNotes,
+  updateShowSummary,
   updateShowTags,
   updateShowTitle,
 } from "@/lib/userLocalSettings/userLocalSettings";
@@ -43,6 +44,7 @@ import {
   LucideIcon,
   NotepadText,
   Settings,
+  Sparkles,
   Tag,
 } from "lucide-react";
 
@@ -116,6 +118,16 @@ export default function ViewOptions() {
         showTitle: checked,
       });
       await updateShowTitle(checked);
+    });
+  };
+
+  const handleShowSummaryChange = (checked: boolean) => {
+    startTransition(async () => {
+      setOptimisticDisplaySettings({
+        ...optimisticDisplaySettings,
+        showSummary: checked,
+      });
+      await updateShowSummary(checked);
     });
   };
 
@@ -235,6 +247,21 @@ export default function ViewOptions() {
               id="show-title"
               checked={optimisticDisplaySettings.showTitle}
               onCheckedChange={handleShowTitleChange}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <Label
+              htmlFor="show-summary"
+              className="flex cursor-pointer items-center gap-2 text-sm"
+            >
+              <Sparkles size={16} />
+              <span>{t("view_options.show_summary_previews")}</span>
+            </Label>
+            <Switch
+              id="show-summary"
+              checked={optimisticDisplaySettings.showSummary}
+              onCheckedChange={handleShowSummaryChange}
             />
           </div>
         </div>

@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
+import { useFullPagePreviewStore } from "@/lib/store/useFullPagePreviewStore";
 
 export default function BookmarkPreviewPage(props: {
   params: Promise<{ bookmarkId: string }>;
@@ -25,6 +26,19 @@ export default function BookmarkPreviewPage(props: {
       router.back();
     }
   };
+
+  // On a hard load of /dashboard/preview/<id> the full-page route also
+  // mounts (children slot) - hide this intercepting modal so exactly one
+  // BookmarkPreview exists (one hotkey set, one counter, one query).
+  // The modal only appears on client-side interception, where the full
+  // page is never mounted.
+  const fullPagePreviewActive = useFullPagePreviewStore(
+    (state) => state.active,
+  );
+
+  if (fullPagePreviewActive) {
+    return null;
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpenWithRouter}>

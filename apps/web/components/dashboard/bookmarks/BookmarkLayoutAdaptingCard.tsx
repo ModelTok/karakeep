@@ -316,7 +316,7 @@ function ListView({
   className,
   bookmarkIndex,
 }: Props) {
-  const { showNotes, showTags, showTitle, imageFit } =
+  const { showNotes, showTags, showTitle, showSummary, imageFit } =
     useBookmarkDisplaySettings();
   const imgFitClass = switchCase(imageFit, {
     cover: "object-cover",
@@ -332,6 +332,11 @@ function ListView({
       )}
       data-bookmark-index={bookmarkIndex}
     >
+      {bookmarkIndex !== undefined && (
+        <span className="pointer-events-none absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+          {bookmarkIndex + 1}
+        </span>
+      )}
       <BulkEditSelectionOverlay bookmark={bookmark} />
       <OwnerIndicator bookmark={bookmark} />
       <DragHandle
@@ -351,6 +356,11 @@ function ListView({
           )}
           {content && <div className="shrink-1 overflow-hidden">{content}</div>}
           {note && <NotePreview note={note} bookmarkId={bookmark.id} />}
+          {showSummary && bookmark.summary && (
+            <p className="line-clamp-3 text-xs text-muted-foreground">
+              {bookmark.summary}
+            </p>
+          )}
           {showTags && (
             <div className="flex shrink-0 flex-wrap gap-1 overflow-hidden">
               <TagList
@@ -378,7 +388,7 @@ function GridView({
   fitHeight = false,
   bookmarkIndex,
 }: Props & { layout: BookmarksLayoutTypes }) {
-  const { showNotes, showTags, showTitle, imageFit } =
+  const { showNotes, showTags, showTitle, showSummary, imageFit } =
     useBookmarkDisplaySettings();
   const imgFitClass = switchCase(imageFit, {
     cover: "object-cover",
@@ -399,6 +409,11 @@ function GridView({
       )}
       data-bookmark-index={bookmarkIndex}
     >
+      {bookmarkIndex !== undefined && (
+        <span className="pointer-events-none absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+          {bookmarkIndex + 1}
+        </span>
+      )}
       <BulkEditSelectionOverlay bookmark={bookmark} />
       <OwnerIndicator bookmark={bookmark} />
       <DragHandle bookmark={bookmark} className="left-2 top-2" />
@@ -413,6 +428,11 @@ function GridView({
           )}
           {content && <div className="shrink-1 overflow-hidden">{content}</div>}
           {note && <NotePreview note={note} bookmarkId={bookmark.id} />}
+          {showSummary && bookmark.summary && (
+            <p className="line-clamp-3 text-xs text-muted-foreground">
+              {bookmark.summary}
+            </p>
+          )}
           {showTags && (
             <div className="flex shrink-0 flex-wrap gap-1 overflow-hidden">
               <TagList
@@ -436,7 +456,7 @@ function CompactView({
   className,
   bookmarkIndex,
 }: Props) {
-  const { showTitle } = useBookmarkDisplaySettings();
+  const { showTitle, showSummary } = useBookmarkDisplaySettings();
   const isBulkEditEnabled = useBulkActionsStore(
     (state) => state.isBulkEditEnabled,
   );
@@ -449,9 +469,14 @@ function CompactView({
       )}
       data-bookmark-index={bookmarkIndex}
     >
+      {bookmarkIndex !== undefined && (
+        <span className="pointer-events-none absolute left-1 top-1 z-10 rounded bg-background/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+          {bookmarkIndex + 1}
+        </span>
+      )}
       <BulkEditSelectionOverlay bookmark={bookmark} />
       <OwnerIndicator bookmark={bookmark} />
-      <div className="flex h-full justify-between gap-2 overflow-hidden p-2">
+      <div className="flex h-full justify-between gap-2 overflow-hidden py-2 pl-8 pr-2">
         <div className="flex items-center gap-2">
           {bookmark.content.type === BookmarkTypes.LINK &&
             bookmark.content.favicon && (
@@ -498,6 +523,11 @@ function CompactView({
           />
         </div>
       </div>
+      {showSummary && bookmark.summary && (
+        <p className="line-clamp-3 px-2 pb-2 text-xs text-muted-foreground">
+          {bookmark.summary}
+        </p>
+      )}
     </div>
   );
 }

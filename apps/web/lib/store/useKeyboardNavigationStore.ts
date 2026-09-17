@@ -4,10 +4,12 @@ interface KeyboardNavigationState {
   focusedIndex: number;
   isNavigating: boolean;
   shortcutsDialogOpen: boolean;
+  isPreviewModalOpen: boolean;
   setFocusedIndex: (index: number) => void;
   clearFocus: () => void;
   moveBy: (delta: number, maxIndex: number) => void;
   setShortcutsDialogOpen: (open: boolean) => void;
+  setIsPreviewModalOpen: (open: boolean) => void;
 }
 
 export const useKeyboardNavigationStore = create<KeyboardNavigationState>(
@@ -15,6 +17,7 @@ export const useKeyboardNavigationStore = create<KeyboardNavigationState>(
     focusedIndex: -1,
     isNavigating: false,
     shortcutsDialogOpen: false,
+    isPreviewModalOpen: false,
 
     setFocusedIndex: (index) =>
       set({ focusedIndex: index, isNavigating: true }),
@@ -33,5 +36,7 @@ export const useKeyboardNavigationStore = create<KeyboardNavigationState>(
       }),
 
     setShortcutsDialogOpen: (open) => set({ shortcutsDialogOpen: open }),
+
+    setIsPreviewModalOpen: (open) => set({ isPreviewModalOpen: open }),
   }),
 );
