@@ -102,7 +102,7 @@ export function FeedsEditorDialog() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button>
-          <CirclePlus className="mr-2 size-4" />
+          <CirclePlus className="size-4" />
           {t("settings.feeds.add_a_subscription")}
         </Button>
       </DialogTrigger>
@@ -187,7 +187,7 @@ export function FeedsEditorDialog() {
             variant="default"
             className="items-center"
           >
-            <Plus className="mr-2 size-4" />
+            <Plus className="size-4" />
             Add
           </ActionButton>
         </DialogFooter>
@@ -337,7 +337,7 @@ export function EditFeedDialog({ feed }: { feed: ZFeed }) {
             type="submit"
             className="items-center"
           >
-            <Save className="mr-2 size-4" />
+            <Save className="size-4" />
             {t("actions.save")}
           </ActionButton>
         </DialogFooter>
@@ -474,7 +474,7 @@ export function FeedRow({ feed }: { feed: ZFeed }) {
               className="items-center"
               type="button"
             >
-              <Trash2 className="mr-2 size-4" />
+              <Trash2 className="size-4" />
               {t("actions.delete")}
             </ActionButton>
           )}

@@ -1,11 +1,10 @@
 import { Ollama } from "ollama";
 import OpenAI, { APIConnectionError } from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
-import * as undici from "undici";
 import { z } from "zod";
 
 import serverConfig from "./config";
-import { customFetch } from "./customFetch";
+import { createCustomFetch } from "./customFetch";
 import logger from "./logger";
 import { QueueRetryAfterError } from "./queueing";
 
@@ -227,9 +226,12 @@ const buildOpenAIClient = (config: OpenAIEmbeddingConfig) =>
       "X-Title": "Karakeep",
       "HTTP-Referer": "https://karakeep.app",
     },
-    fetchOptions: config.proxyUrl
-      ? { dispatcher: new undici.ProxyAgent(config.proxyUrl) }
-      : undefined,
+    fetch: createCustomFetch(
+      config.timeoutSec !== undefined
+        ? config.timeoutSec * 1000
+        : OpenAI.DEFAULT_TIMEOUT,
+      config.proxyUrl,
+    ),
   });
 
 export class InferenceClientFactory {
@@ -458,7 +460,7 @@ class OllamaInferenceClient implements InferenceClient {
     this.config = config;
     this.ollama = new Ollama({
       host: config.baseUrl,
-      fetch: customFetch, // Use the custom fetch with configurable timeout
+      fetch: createCustomFetch(serverConfig.inference.fetchTimeoutSec * 1000),
     });
   }
 

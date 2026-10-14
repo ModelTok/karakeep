@@ -57,6 +57,7 @@ Run from repo root (Turborepo fans out to all packages):
 - `pnpm preflight` — typecheck + lint + format together. `pnpm preflight:fix` — the autofix variant. Run before committing (a Husky pre-commit hook also runs checks).
 - `pnpm db:generate --name description_of_change` — generate a migration after editing `packages/db/schema.ts`.
 - `pnpm db:studio` — Drizzle Studio.
+- To scope any of the above to one package, pass a turbo filter: `pnpm typecheck --filter=@karakeep/web` (prefer this over `pnpm --filter`).
 
 ### Running a single test
 
