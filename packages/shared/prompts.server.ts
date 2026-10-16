@@ -1,7 +1,11 @@
 import type { Tiktoken } from "js-tiktoken";
 
 import type { ZTagStyle } from "./types/users";
-import { constructSummaryPrompt, constructTextTaggingPrompt } from "./prompts";
+import {
+  constructDigestPrompt,
+  constructSummaryPrompt,
+  constructTextTaggingPrompt,
+} from "./prompts";
 
 let encoding: Tiktoken | null = null;
 
@@ -88,4 +92,38 @@ export async function buildSummaryPrompt(
   const truncatedContent =
     available === 0 ? "" : await truncateContent(content, available);
   return constructSummaryPrompt(lang, customPrompts, truncatedContent);
+}
+
+/**
+ * Build the weekly digest prompt, keeping as many whole item lines as fit in
+ * the context window (leaving room for the reply). Items are dropped whole
+ * rather than cut mid-line so the model never sees a half-finished note.
+ */
+export async function buildDigestPrompt(
+  lang: string,
+  itemLines: string[],
+  maxWords: number,
+  contextLength: number,
+): Promise<{ prompt: string; includedCount: number }> {
+  const templateSize = await calculateNumTokens(
+    constructDigestPrompt(lang, "", maxWords),
+  );
+  // Roughly 1.5 tokens per word is plenty of headroom for the reply.
+  const replyReserve = Math.ceil(maxWords * 1.5) + 200;
+  let remaining = contextLength - templateSize - replyReserve;
+
+  const included: string[] = [];
+  for (const line of itemLines) {
+    const cost = (await calculateNumTokens(line)) + 1;
+    if (cost > remaining) {
+      break;
+    }
+    remaining -= cost;
+    included.push(line);
+  }
+
+  return {
+    prompt: constructDigestPrompt(lang, included.join("\n"), maxWords),
+    includedCount: included.length,
+  };
 }

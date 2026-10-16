@@ -1,15 +1,31 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, gt } from "drizzle-orm";
+import { and, asc, eq, gt, inArray } from "drizzle-orm";
 import { workerStatsCounter } from "metrics";
 import cron from "node-cron";
 import { buildImpersonatingTRPCClient } from "trpc";
 import { withWorkerEventLog, withWorkerTracing } from "workerTracing";
 
+import {
+  digestWordBudget,
+  formatItemForPrompt,
+  prepareDigestItems,
+  renderDigest,
+} from "./utils/digestFormatter";
+
 import type { ZDigestRequest } from "@karakeep/shared-server";
 import { db } from "@karakeep/db";
-import { bookmarkLinks, bookmarks, users } from "@karakeep/db/schema";
+import {
+  bookmarkLinks,
+  bookmarkTags,
+  bookmarks,
+  tagsOnBookmarks,
+  users,
+} from "@karakeep/db/schema";
 import { addLogFields, DigestQueue } from "@karakeep/shared-server";
+import serverConfig from "@karakeep/shared/config";
+import { InferenceClientFactory } from "@karakeep/shared/inference";
 import logger from "@karakeep/shared/logger";
+import { buildDigestPrompt } from "@karakeep/shared/prompts.server";
 import { DequeuedJob, getQueueClient } from "@karakeep/shared/queueing";
 import { BookmarkTypes } from "@karakeep/shared/types/bookmarks";
 
@@ -104,7 +120,7 @@ export class DigestWorker {
       {
         concurrency: 1,
         pollIntervalMs: 5000,
-        timeoutSecs: 120,
+        timeoutSecs: 300,
       },
     );
 
@@ -112,23 +128,90 @@ export class DigestWorker {
   }
 }
 
-function buildDigestMarkdown(
-  items: { title: string | null; url: string; summary: string | null }[],
-): string {
-  return items
-    .map((item) => {
-      const title = item.title ?? item.url;
-      let line = `- [${title}](${item.url})`;
-      if (item.summary) {
-        line += `\n  ${item.summary}`;
-      }
-      return line;
-    })
-    .join("\n");
+async function buildDigestMarkdown(
+  jobId: string,
+  userId: string,
+  rows: {
+    id: string;
+    title: string | null;
+    crawledTitle: string | null;
+    summary: string | null;
+    description: string | null;
+    url: string;
+  }[],
+  abortSignal: AbortSignal,
+): Promise<string> {
+  const tagRows = await db
+    .select({ bookmarkId: tagsOnBookmarks.bookmarkId, name: bookmarkTags.name })
+    .from(tagsOnBookmarks)
+    .innerJoin(bookmarkTags, eq(bookmarkTags.id, tagsOnBookmarks.tagId))
+    .where(
+      inArray(
+        tagsOnBookmarks.bookmarkId,
+        rows.map((r) => r.id),
+      ),
+    );
+  const tagsByBookmark = new Map<string, string[]>();
+  for (const { bookmarkId, name } of tagRows) {
+    tagsByBookmark.set(bookmarkId, [
+      ...(tagsByBookmark.get(bookmarkId) ?? []),
+      name,
+    ]);
+  }
+
+  const items = prepareDigestItems(
+    rows.map((r) => ({
+      title: r.title ?? r.crawledTitle,
+      url: r.url,
+      summary: r.summary ?? r.description,
+      tags: tagsByBookmark.get(r.id) ?? [],
+    })),
+  );
+
+  const inferenceClient = InferenceClientFactory.build();
+  if (!inferenceClient) {
+    logger.info(
+      `[digest][${jobId}] No inference provider configured; using the plain digest.`,
+    );
+    return renderDigest(null, items);
+  }
+
+  const userSettings = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { inferredTagLang: true },
+  });
+
+  const { prompt, includedCount } = await buildDigestPrompt(
+    userSettings?.inferredTagLang ?? serverConfig.inference.inferredTagLang,
+    items.map(formatItemForPrompt),
+    digestWordBudget(items.length),
+    serverConfig.inference.contextLength,
+  );
+
+  try {
+    const result = await inferenceClient.inferFromText(prompt, {
+      schema: null,
+      abortSignal,
+    });
+    logger.info(
+      `[digest][${jobId}] Edited ${includedCount}/${items.length} items using ${result.totalTokens} tokens.`,
+    );
+    return renderDigest(result.response, items);
+  } catch (error) {
+    if (abortSignal.aborted) {
+      throw error;
+    }
+    // A flaky model shouldn't cost the user their digest.
+    logger.warn(
+      `[digest][${jobId}] Inference failed, using the plain digest: ${error}`,
+    );
+    return renderDigest(null, items);
+  }
 }
 
 async function run(req: DequeuedJob<ZDigestRequest>) {
   const jobId = req.id;
+  const abortSignal = req.abortSignal;
   const userId = req.data.userId;
   addLogFields<"digestWorker.run">({ "user.id": userId });
 
@@ -138,8 +221,11 @@ async function run(req: DequeuedJob<ZDigestRequest>) {
 
   const rows = await db
     .select({
+      id: bookmarks.id,
       title: bookmarks.title,
+      crawledTitle: bookmarkLinks.title,
       summary: bookmarks.summary,
+      description: bookmarkLinks.description,
       url: bookmarkLinks.url,
     })
     .from(bookmarks)
@@ -178,7 +264,7 @@ async function run(req: DequeuedJob<ZDigestRequest>) {
 
   const weekStart = isoDate(sevenDaysAgo);
   const weekEnd = isoDate(new Date());
-  const markdown = buildDigestMarkdown(rows);
+  const markdown = await buildDigestMarkdown(jobId, userId, rows, abortSignal);
 
   const bookmark = await trpcClient.bookmarks.createBookmark({
     type: BookmarkTypes.TEXT,
