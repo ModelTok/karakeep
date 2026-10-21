@@ -50,6 +50,18 @@ function preprocessContent(content: string) {
   return content.replace(/(\s){10,}/g, "$1");
 }
 
+/**
+ * How many tokens of page content fit next to the prompt template. Filling the
+ * context to the brim leaves nothing for the reply, and a model that counts
+ * tokens a little differently from o200k overflows it; Ollama then drops the
+ * start of the prompt, which is where the instructions are. So keep some of
+ * the window free.
+ */
+function contentBudget(contextLength: number, promptSize: number): number {
+  const headroom = Math.ceil(contextLength * 0.15);
+  return Math.max(0, contextLength - promptSize - headroom);
+}
+
 export async function buildTextPrompt(
   lang: string,
   customPrompts: string[],
@@ -69,7 +81,7 @@ export async function buildTextPrompt(
     potentialRelevantTags,
   );
   const promptSize = await calculateNumTokens(promptTemplate);
-  const available = Math.max(0, contextLength - promptSize);
+  const available = contentBudget(contextLength, promptSize);
   const truncatedContent =
     available === 0 ? "" : await truncateContent(content, available);
   return constructTextTaggingPrompt(
@@ -91,14 +103,14 @@ export async function buildSummaryPrompt(
   content = preprocessContent(content);
   const promptTemplate = constructSummaryPrompt(lang, customPrompts, "");
   const promptSize = await calculateNumTokens(promptTemplate);
-  const available = Math.max(0, contextLength - promptSize);
+  const available = contentBudget(contextLength, promptSize);
   const truncatedContent =
     available === 0 ? "" : await truncateContent(content, available);
   return constructSummaryPrompt(lang, customPrompts, truncatedContent);
 }
 
 /**
- * Build the weekly digest prompt, keeping as many whole item lines as fit in
+ * Build the digest prompt, keeping as many whole item lines as fit in
  * the context window (leaving room for the reply). Items are dropped whole
  * rather than cut mid-line so the model never sees a half-finished note.
  */
