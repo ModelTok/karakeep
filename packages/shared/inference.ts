@@ -449,6 +449,9 @@ export interface OllamaInferenceConfig {
   contextLength: number;
   maxOutputTokens: number;
   keepAlive?: string;
+  // Unset leaves the model's default. Thinking models (e.g. qwen3.5) otherwise
+  // spend the output budget reasoning and can return an empty answer.
+  think?: boolean;
   outputSchema: "structured" | "json" | "plain";
 }
 
@@ -472,6 +475,7 @@ class OllamaInferenceClient implements InferenceClient {
       contextLength: serverConfig.inference.contextLength,
       maxOutputTokens: serverConfig.inference.maxOutputTokens,
       keepAlive: serverConfig.inference.ollamaKeepAlive,
+      think: serverConfig.inference.ollamaThink,
       outputSchema: serverConfig.inference.outputSchema,
     });
   }
@@ -509,6 +513,7 @@ class OllamaInferenceClient implements InferenceClient {
       ),
       stream: true,
       keep_alive: this.config.keepAlive,
+      think: this.config.think,
       options: {
         num_ctx: this.config.contextLength,
         num_predict: this.config.maxOutputTokens,
