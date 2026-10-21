@@ -107,7 +107,7 @@ ${customPrompts && customPrompts.map((p) => `- ${p}`).join("\n")}
 }
 
 /**
- * Construct the weekly digest prompt. `items` is a pre-rendered block with one
+ * Construct the digest prompt. `items` is a pre-rendered block with one
  * numbered line per saved item; the model refers to items by `[#id]` only, so
  * links can be filled in afterwards and can never be invented.
  */
@@ -117,10 +117,10 @@ export function constructDigestPrompt(
   maxWords: number,
 ): string {
   return `
-You are the editor of a personal weekly briefing. The reader saved the ITEMS below during the past week. Turn them into a short, sharp briefing the way a good editor would, not a list of everything.
+You are the editor of a personal briefing. The reader saved the ITEMS below since the previous briefing. Turn them into a short, sharp briefing the way a good editor would, not a list of everything.
 
 Rules:
-- Write in ${lang}. Plain, confident prose. No filler such as "this week you saved", no hype, no emojis.
+- Write in ${lang}. Plain, confident prose. No filler such as "you saved", no hype, no emojis.
 - Hard limit: ${maxWords} words in total.
 - Synthesise, don't enumerate. Group related items into 2-5 themes and say what they add up to. When several items cover the same story or topic, merge them into one point and cite all of them.
 - Lead with what matters most. Drop trivia, marketing fluff and anything that adds nothing new. You do NOT have to mention every item; items you leave out are listed automatically afterwards.
@@ -131,7 +131,7 @@ Rules:
 - Cite sources only by id, written exactly like [#3] or [#3][#7]. Never write URLs or titles, and only use ids from the list.
 
 Format (Markdown):
-- Start with an overview of 2-3 sentences with no heading: the single most important takeaway of the week.
+- Start with an overview of 2-3 sentences with no heading: the single most important takeaway.
 - Then "## Read first" with at most 3 bullets, each "- [#id] one sentence, drawn only from that item's own note, on why it is worth the reader's time".
 - Then one "## <theme title>" section per theme, each a single short paragraph (2-4 sentences) with citations.
 Respond with ONLY the briefing.

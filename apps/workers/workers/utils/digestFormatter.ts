@@ -19,6 +19,37 @@ const SUMMARY_CHARS_FOR_PROMPT = 280;
 const SUMMARY_CHARS_FALLBACK = 160;
 const FALLBACK_HIGHLIGHTS = 8;
 const ALSO_SAVED_LIMIT = 25;
+// Below this a "briefing" has nothing to synthesise; a plain list serves better
+// and saves a model call.
+const MIN_ITEMS_FOR_BRIEFING = 4;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_WINDOW_MS = 7 * DAY_MS;
+
+export function shouldWriteBriefing(itemCount: number): boolean {
+  return itemCount >= MIN_ITEMS_FOR_BRIEFING;
+}
+
+/**
+ * Where this digest's window starts: right after the previous digest, so
+ * nothing is missed or repeated however the run is timed. Without a previous
+ * digest it is the last day; after a long gap it is capped at a week.
+ */
+export function digestWindowStart(lastDigestAt: Date | null, now: Date): Date {
+  const earliest = new Date(now.getTime() - MAX_WINDOW_MS);
+  const start = lastDigestAt ?? new Date(now.getTime() - DAY_MS);
+  return start < earliest ? earliest : start;
+}
+
+const isoDate = (d: Date): string => d.toISOString().split("T")[0];
+
+export function digestTitle(name: string, start: Date, end: Date): string {
+  const from = isoDate(start);
+  const to = isoDate(end);
+  // A window of about a day (allowing for run-time jitter) is just "today's" digest.
+  return end.getTime() - start.getTime() <= DAY_MS + 60 * 60 * 1000
+    ? `${name} — ${to}`
+    : `${name} — ${from} to ${to}`;
+}
 
 function getDomain(url: string): string {
   try {
@@ -171,7 +202,7 @@ function trimModelExtras(text: string): string {
     const heading = l.match(HEADING)?.[1] ?? "";
     if (
       /^\*\*[^*]+\*\*:?$/.test(l) ||
-      /^(overview|summary|key takeaways?|(the )?weekly briefing\b.*|the week\b.*)$/i.test(
+      /^(overview|summary|key takeaways?|(the )?(daily |weekly )?briefing\b.*|the (week|day)\b.*)$/i.test(
         heading,
       )
     ) {
@@ -298,9 +329,7 @@ function alsoSaved(items: DigestItem[]): string {
     .slice(0, ALSO_SAVED_LIMIT)
     .map((i) => `- ${link(i.title, i.url)}`);
   if (items.length > ALSO_SAVED_LIMIT) {
-    shown.push(
-      `- …and ${items.length - ALSO_SAVED_LIMIT} more saved this week.`,
-    );
+    shown.push(`- …and ${items.length - ALSO_SAVED_LIMIT} more saved.`);
   }
   return `## Also saved\n\n${shown.join("\n")}`;
 }
@@ -312,7 +341,7 @@ function plainFallback(items: DigestItem[]): string {
     return `- ${link(item.title, item.url)}${summary ? ` — ${summary}` : ""}`;
   });
   const parts = [
-    `${items.length} ${items.length === 1 ? "link" : "links"} saved this week.`,
+    `${items.length} ${items.length === 1 ? "link" : "links"} saved since the last digest.`,
     lines.join("\n"),
   ];
   const rest = alsoSaved(items.slice(FALLBACK_HIGHLIGHTS));

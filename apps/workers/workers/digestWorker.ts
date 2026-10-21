@@ -1,15 +1,18 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, gt, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
 import { workerStatsCounter } from "metrics";
 import cron from "node-cron";
 import { buildImpersonatingTRPCClient } from "trpc";
 import { withWorkerEventLog, withWorkerTracing } from "workerTracing";
 
 import {
+  digestTitle,
+  digestWindowStart,
   digestWordBudget,
   formatItemForPrompt,
   prepareDigestItems,
   renderDigest,
+  shouldWriteBriefing,
 } from "./utils/digestFormatter";
 
 import type { ZDigestRequest } from "@karakeep/shared-server";
@@ -31,17 +34,19 @@ import { BookmarkTypes } from "@karakeep/shared/types/bookmarks";
 
 const DIGEST_LIST_NAME = "Prasówka";
 const DIGEST_LIST_ICON = "📰";
-const DAY_MS = 24 * 60 * 60 * 1000;
+// A daily digest should land close to the scheduled time, so users are only
+// staggered over a short window rather than across the whole day.
+const SPREAD_MS = 30 * 60 * 1000;
 
 function isoDate(d: Date): string {
   return d.toISOString().split("T")[0];
 }
 
-// Run weekly on Monday at 08:00 server time
+// Run daily at 06:00 UTC (08:00 in Poland during summer time)
 export const DigestSchedulingWorker = cron.schedule(
-  "0 8 * * MON",
+  "0 6 * * *",
   async () => {
-    logger.info("[digest] Scheduling weekly digest jobs ...");
+    logger.info("[digest] Scheduling daily digest jobs ...");
     try {
       const usersWithDigest = await db.query.users.findMany({
         columns: {
@@ -55,15 +60,15 @@ export const DigestSchedulingWorker = cron.schedule(
       );
 
       const now = new Date();
-      const currentWeek = isoDate(now); // Monday's date, since this only runs on Mondays
+      const today = isoDate(now);
 
       for (const user of usersWithDigest) {
-        // Deterministically spread digest generation across the day based on user ID
+        // Deterministically stagger digest generation based on user ID
         const hash = createHash("sha256").update(user.id).digest("hex");
         const hashNum = parseInt(hash.substring(0, 8), 16);
-        const delayMs = hashNum % DAY_MS;
+        const delayMs = hashNum % SPREAD_MS;
 
-        const idempotencyKey = `${user.id}-${currentWeek}`;
+        const idempotencyKey = `${user.id}-${today}`;
 
         await DigestQueue.enqueue(
           {
@@ -88,6 +93,8 @@ export const DigestSchedulingWorker = cron.schedule(
   {
     runOnInit: false,
     scheduled: false,
+    // Pin the zone so "06:00" does not depend on the host's TZ.
+    timezone: "UTC",
   },
 );
 
@@ -168,6 +175,13 @@ async function buildDigestMarkdown(
     })),
   );
 
+  if (!shouldWriteBriefing(items.length)) {
+    logger.info(
+      `[digest][${jobId}] Only ${items.length} item(s); using the plain digest.`,
+    );
+    return renderDigest(null, items);
+  }
+
   const inferenceClient = InferenceClientFactory.build();
   if (!inferenceClient) {
     logger.info(
@@ -218,7 +232,15 @@ async function run(req: DequeuedJob<ZDigestRequest>) {
 
   logger.info(`[digest][${jobId}] Building digest for user ${userId} ...`);
 
-  const sevenDaysAgo = new Date(Date.now() - 7 * DAY_MS);
+  // Cover everything saved since the previous digest (a manual "send now"
+  // counts), so scheduled and manual runs never repeat or skip links.
+  const lastDigest = await db.query.bookmarks.findFirst({
+    columns: { createdAt: true },
+    where: and(eq(bookmarks.userId, userId), eq(bookmarks.source, "digest")),
+    orderBy: desc(bookmarks.createdAt),
+  });
+  const now = new Date();
+  const windowStart = digestWindowStart(lastDigest?.createdAt ?? null, now);
 
   const rows = await db
     .select({
@@ -235,14 +257,14 @@ async function run(req: DequeuedJob<ZDigestRequest>) {
       and(
         eq(bookmarks.userId, userId),
         eq(bookmarks.type, BookmarkTypes.LINK),
-        gt(bookmarks.createdAt, sevenDaysAgo),
+        gt(bookmarks.createdAt, windowStart),
       ),
     )
     .orderBy(asc(bookmarks.createdAt));
 
   if (rows.length === 0) {
     logger.info(
-      `[digest][${jobId}] No new links in the last 7 days for user ${userId}. Skipping.`,
+      `[digest][${jobId}] No new links since ${windowStart.toISOString()} for user ${userId}. Skipping.`,
     );
     return;
   }
@@ -263,13 +285,11 @@ async function run(req: DequeuedJob<ZDigestRequest>) {
     );
   }
 
-  const weekStart = isoDate(sevenDaysAgo);
-  const weekEnd = isoDate(new Date());
   const markdown = await buildDigestMarkdown(jobId, userId, rows, abortSignal);
 
   const bookmark = await trpcClient.bookmarks.createBookmark({
     type: BookmarkTypes.TEXT,
-    title: `${DIGEST_LIST_NAME} — ${weekStart} to ${weekEnd}`,
+    title: digestTitle(DIGEST_LIST_NAME, windowStart, now),
     text: markdown,
     source: "digest",
   });

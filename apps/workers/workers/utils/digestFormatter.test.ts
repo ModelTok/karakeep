@@ -2,11 +2,14 @@ import { describe, expect, test } from "vitest";
 
 import {
   condense,
+  digestTitle,
+  digestWindowStart,
   digestWordBudget,
   formatItemForPrompt,
   normaliseUrl,
   prepareDigestItems,
   renderDigest,
+  shouldWriteBriefing,
 } from "./digestFormatter";
 
 const row = (
@@ -78,6 +81,53 @@ describe("formatItemForPrompt", () => {
   });
 });
 
+describe("digestWindowStart", () => {
+  const now = new Date("2026-10-22T06:05:00Z");
+  const hours = (h: number) => new Date(now.getTime() - h * 60 * 60 * 1000);
+
+  test("starts at the previous digest so nothing is missed or repeated", () => {
+    expect(digestWindowStart(hours(23.9), now)).toEqual(hours(23.9));
+    expect(digestWindowStart(hours(25), now)).toEqual(hours(25));
+  });
+
+  test("defaults to the last 24 hours when there has been no digest", () => {
+    expect(digestWindowStart(null, now)).toEqual(hours(24));
+  });
+
+  test("never reaches back more than 7 days after a long gap", () => {
+    expect(digestWindowStart(hours(24 * 30), now)).toEqual(hours(24 * 7));
+  });
+});
+
+describe("digestTitle", () => {
+  test("uses one date when the window is within a day", () => {
+    expect(
+      digestTitle(
+        "Prasówka",
+        new Date("2026-10-21T06:01:00Z"),
+        new Date("2026-10-22T06:04:00Z"),
+      ),
+    ).toBe("Prasówka — 2026-10-22");
+  });
+
+  test("shows a range after a catch-up covering several days", () => {
+    expect(
+      digestTitle(
+        "Prasówka",
+        new Date("2026-10-19T06:00:00Z"),
+        new Date("2026-10-22T06:04:00Z"),
+      ),
+    ).toBe("Prasówka — 2026-10-19 to 2026-10-22");
+  });
+});
+
+describe("shouldWriteBriefing", () => {
+  test("only asks the model for a briefing when there is enough to synthesise", () => {
+    expect(shouldWriteBriefing(3)).toBe(false);
+    expect(shouldWriteBriefing(4)).toBe(true);
+  });
+});
+
 describe("digestWordBudget", () => {
   test("stays between 150 and 450 words", () => {
     expect(digestWordBudget(1)).toBe(150);
@@ -129,7 +179,7 @@ describe("renderDigest", () => {
       "Here is a long ramble without any citations at all, sorry.",
       items,
     );
-    expect(out).toContain("3 links saved this week.");
+    expect(out).toContain("3 links saved since the last digest.");
     expect(out).toContain("- [Alpha](https://a.com/1) — Alpha summary.");
   });
 
@@ -243,7 +293,7 @@ describe("renderDigest", () => {
   test("falls back when the model writes far more than the word budget", () => {
     const rambling = `Alpha is covered [#1]. ${"More words here. ".repeat(100)}`;
     const out = renderDigest(rambling, items, 50);
-    expect(out).toContain("3 links saved this week.");
+    expect(out).toContain("3 links saved since the last digest.");
   });
 
   test("falls back when most citations are invented ids", () => {
@@ -251,7 +301,7 @@ describe("renderDigest", () => {
       "Overview of the week [#40] with several claims [#41][#42] and one real one [#1].",
       items,
     );
-    expect(out).toContain("3 links saved this week.");
+    expect(out).toContain("3 links saved since the last digest.");
   });
 
   test("uses the plain digest without model output, capped with an also-saved list", () => {
@@ -261,8 +311,8 @@ describe("renderDigest", () => {
       ),
     );
     const out = renderDigest(null, many);
-    expect(out).toContain("40 links saved this week.");
+    expect(out).toContain("40 links saved since the last digest.");
     expect(out).toContain("## Also saved");
-    expect(out).toContain("…and 7 more saved this week.");
+    expect(out).toContain("…and 7 more saved.");
   });
 });
