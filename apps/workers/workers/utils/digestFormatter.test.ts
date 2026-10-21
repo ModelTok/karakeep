@@ -133,6 +133,127 @@ describe("renderDigest", () => {
     expect(out).toContain("- [Alpha](https://a.com/1) — Alpha summary.");
   });
 
+  // The cases below are real failure shapes seen from small local models.
+  test("drops an item list the model appended after the briefing", () => {
+    const out = renderDigest(
+      [
+        "A solid overview of the week [#1].",
+        "",
+        "## Things",
+        "Beta matters here [#2].",
+        "",
+        "**Unread Items:**",
+        "",
+        "[#1] Alpha",
+        "[#3] Gamma",
+      ].join("\n"),
+      items,
+    );
+    expect(out).not.toContain("Unread");
+    expect(out).not.toContain("Alpha\n");
+    expect(out).toContain("## Also saved\n\n- [Gamma](https://c.com/3)");
+  });
+
+  test("keeps a Read-first list that happens to end the briefing", () => {
+    const out = renderDigest(
+      [
+        "A solid overview of the week and what matters in it.",
+        "",
+        "## Read first",
+        "- [#1] The clearest explainer.",
+        "- [#2] The best counterpoint.",
+      ].join("\n"),
+      items,
+    );
+    expect(out).toContain(
+      "- **[Alpha](https://a.com/1)** — The clearest explainer.",
+    );
+    expect(out).toContain(
+      "- **[Beta](https://b.com/2)** — The best counterpoint.",
+    );
+  });
+
+  test("turns bold-wrapped citations in bullets into title links", () => {
+    const out = renderDigest(
+      [
+        "A solid overview of the week and what matters in it.",
+        "",
+        "## Read first",
+        "- **[#1] Alpha:** The clearest explainer.",
+        "*   **[#2]** The best counterpoint.",
+      ].join("\n"),
+      items,
+    );
+    expect(out).toContain(
+      "- **[Alpha](https://a.com/1)** — The clearest explainer.",
+    );
+    expect(out).toContain(
+      "*   **[Beta](https://b.com/2)** — The best counterpoint.",
+    );
+    expect(out).not.toContain("[#");
+  });
+
+  test("drops a title and (domain) echoed back after the citation", () => {
+    const out = renderDigest(
+      [
+        "A solid overview of the week and what matters in it.",
+        "",
+        "## Read first",
+        "- [#1] Alpha (a.com) The clearest explainer.",
+      ].join("\n"),
+      items,
+    );
+    expect(out).toContain(
+      "- **[Alpha](https://a.com/1)** — The clearest explainer.",
+    );
+  });
+
+  test("drops a title or overview heading the prompt did not ask for", () => {
+    for (const first of [
+      "**Weekly Briefing: AI footprint**",
+      "## Overview",
+      "## Key Takeaway",
+    ]) {
+      const out = renderDigest(
+        `${first}\n\nA solid overview of the week [#1] and what matters in it.`,
+        items,
+      );
+      expect(out.startsWith("A solid overview")).toBe(true);
+    }
+  });
+
+  test("drops a generic closing section", () => {
+    const out = renderDigest(
+      [
+        "A solid overview of the week [#1] and what matters in it.",
+        "",
+        "## Things",
+        "Beta matters here [#2].",
+        "",
+        "## Conclusion",
+        "The week shows rapid progress. We must act responsibly.",
+      ].join("\n"),
+      items,
+    );
+    expect(out).not.toContain("Conclusion");
+    expect(out).not.toContain("act responsibly");
+    expect(out).toContain("## Things");
+  });
+
+  test("falls back when the model writes far more than the word budget", () => {
+    const rambling = `Alpha is covered [#1]. ${"More words here. ".repeat(100)}`;
+    const out = renderDigest(rambling, items, 50);
+    expect(out).toContain("3 links saved this week.");
+  });
+
+  test("falls back when most citations are invented ids", () => {
+    const out = renderDigest(
+      "Overview of the week [#40] with several claims [#41][#42] and one real one [#1].",
+      items,
+    );
+    expect(out).toContain("3 links saved this week.");
+  });
+
   test("uses the plain digest without model output, capped with an also-saved list", () => {
     const many = prepareDigestItems(
       Array.from({ length: 40 }, (_, i) =>

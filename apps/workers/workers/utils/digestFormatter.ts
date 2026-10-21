@@ -149,6 +149,89 @@ function stripCodeFence(text: string): string {
 
 const CITATION_RUN = /(?:\[#\d+\]\s*)+/g;
 
+const HEADING = /^#{1,6}\s+(.*?)\s*#*\s*$/;
+const STARTS_WITH_CITATION = /^\s*(?:[-*]\s+)?\**\s*\[#\d+\]/;
+
+function wordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Small models tack on things the prompt forbids: a title or "Overview"
+ * heading, a re-listing of the items, a generic conclusion. Cut those, but
+ * hand the text back untouched if that would leave next to nothing.
+ */
+function trimModelExtras(text: string): string {
+  let lines = text.split("\n");
+
+  // A title line before the overview.
+  const first = lines.findIndex((l) => l.trim() !== "");
+  if (first >= 0) {
+    const l = lines[first].trim();
+    const heading = l.match(HEADING)?.[1] ?? "";
+    if (
+      /^\*\*[^*]+\*\*:?$/.test(l) ||
+      /^(overview|summary|key takeaways?|(the )?weekly briefing\b.*|the week\b.*)$/i.test(
+        heading,
+      )
+    ) {
+      lines = lines.slice(first + 1);
+    }
+  }
+
+  // A closing section: from its heading to the next heading, or the end.
+  const out: string[] = [];
+  let skipping = false;
+  for (const l of lines) {
+    const heading = l.trim().match(HEADING)?.[1];
+    if (heading !== undefined) {
+      skipping = /^(in )?(conclusion|final thoughts|closing thoughts)\b/i.test(
+        heading,
+      );
+    }
+    if (!skipping) {
+      out.push(l);
+    }
+  }
+  lines = out;
+
+  // A list of items re-typed at the very end, plus its label. A trailing
+  // "Read first" list is the one legitimate list, so leave that alone.
+  let end = lines.length;
+  while (end > 0 && lines[end - 1].trim() === "") {
+    end--;
+  }
+  let start = end;
+  while (
+    start > 0 &&
+    (STARTS_WITH_CITATION.test(lines[start - 1]) ||
+      lines[start - 1].trim() === "")
+  ) {
+    start--;
+  }
+  if (start < end) {
+    let section = "";
+    for (let i = start - 1; i >= 0; i--) {
+      const h = lines[i].trim().match(HEADING)?.[1];
+      if (h !== undefined) {
+        section = h;
+        break;
+      }
+    }
+    if (!/read first/i.test(section)) {
+      const label = lines[start - 1]?.trim() ?? "";
+      const isLabel =
+        label.length > 0 &&
+        label.length <= 60 &&
+        (/^\*\*.+\*\*:?$/.test(label) || label.endsWith(":"));
+      lines = lines.slice(0, isLabel ? start - 1 : start);
+    }
+  }
+
+  const cleaned = lines.join("\n").trim();
+  return cleaned.length < 40 ? text : cleaned;
+}
+
 /**
  * Replace the model's [#id] citations with real links: a bullet that opens
  * with a citation becomes a bold title link, any other run of citations becomes
@@ -180,7 +263,8 @@ function resolveCitations(
   return body
     .split("\n")
     .map((line) => {
-      const bullet = line.match(/^(\s*[-*]\s+)((?:\[#\d+\]\s*)+)(.*)$/);
+      // Models like to bold the citation, e.g. "- **[#2] Title:** why".
+      const bullet = line.match(/^(\s*[-*]\s+)\**\s*((?:\[#\d+\]\s*)+)(.*)$/);
       if (!bullet) {
         return inline(line);
       }
@@ -190,7 +274,16 @@ function resolveCitations(
       }
       cited.add(first.id);
       others.forEach((i) => cited.add(i.id));
-      const reason = inline(bullet[3].replace(/^[\s—–:-]+/, ""));
+      // Drop leftover bold markers and a title the model echoed back.
+      let rest = bullet[3].replace(/\*\*/g, "").trimStart();
+      if (rest.toLowerCase().startsWith(first.title.toLowerCase())) {
+        rest = rest.slice(first.title.length).trimStart();
+        // ...and the "(domain)" the prompt format invites after the title.
+        if (rest.toLowerCase().startsWith(`(${first.domain.toLowerCase()})`)) {
+          rest = rest.slice(first.domain.length + 2);
+        }
+      }
+      const reason = inline(rest.replace(/^[\s—–:-]+/, ""));
       const title = `**${link(first.title, first.url)}**`;
       return `${bullet[1]}${title}${reason ? ` — ${reason}` : ""}`;
     })
@@ -238,18 +331,29 @@ function plainFallback(items: DigestItem[]): string {
 export function renderDigest(
   modelOutput: string | null,
   items: DigestItem[],
+  maxWords?: number,
 ): string {
   if (!modelOutput) {
     return plainFallback(items);
   }
 
   const byId = new Map(items.map((i) => [i.id, i]));
+  const text = trimModelExtras(stripCodeFence(modelOutput));
+
+  // A model that blows well past the word limit has usually ignored the brief
+  // and started enumerating, or it hit the output cap mid-sentence.
+  if (maxWords !== undefined && wordCount(text) > maxWords * 2) {
+    return plainFallback(items);
+  }
+  // Mostly invented ids means the model is not describing these items.
+  const ids = [...text.matchAll(/\[#(\d+)\]/g)].map((m) => Number(m[1]));
+  const invented = ids.filter((id) => !byId.has(id)).length;
+  if (invented > ids.length - invented) {
+    return plainFallback(items);
+  }
+
   const cited = new Set<number>();
-  const body = resolveCitations(
-    stripCodeFence(modelOutput),
-    byId,
-    cited,
-  ).trim();
+  const body = resolveCitations(text, byId, cited).trim();
 
   // No usable citations means the model ignored the format; don't ship it.
   if (cited.size === 0 || body.length < 40) {

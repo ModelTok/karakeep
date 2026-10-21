@@ -181,10 +181,11 @@ async function buildDigestMarkdown(
     columns: { inferredTagLang: true },
   });
 
+  const maxWords = digestWordBudget(items.length);
   const { prompt, includedCount } = await buildDigestPrompt(
     userSettings?.inferredTagLang ?? serverConfig.inference.inferredTagLang,
     items.map(formatItemForPrompt),
-    digestWordBudget(items.length),
+    maxWords,
     serverConfig.inference.contextLength,
   );
 
@@ -196,7 +197,7 @@ async function buildDigestMarkdown(
     logger.info(
       `[digest][${jobId}] Edited ${includedCount}/${items.length} items using ${result.totalTokens} tokens.`,
     );
-    return renderDigest(result.response, items);
+    return renderDigest(result.response, items, maxWords);
   } catch (error) {
     if (abortSignal.aborted) {
       throw error;
