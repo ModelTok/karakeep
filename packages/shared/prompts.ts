@@ -125,12 +125,14 @@ Rules:
 - Synthesise, don't enumerate. Group related items into 2-5 themes and say what they add up to. When several items cover the same story or topic, merge them into one point and cite all of them.
 - Lead with what matters most. Drop trivia, marketing fluff and anything that adds nothing new. You do NOT have to mention every item; items you leave out are listed automatically afterwards.
 - Never repeat a fact, and never just restate an item's title as its description.
-- Only use facts present in the item notes. Do not invent details, numbers or quotes.
+- Only use facts present in the item notes. Do not invent details or quotes, and keep numbers exactly as written (never round them up).
+- Each fact must come from the item you cite for it. Never attach one item's facts to another item's id, and never describe an item as something its note does not say it is.
+- If an item's note says the page failed to load or is an error page (for example 404, "cannot be loaded", "technical difficulties"), leave that item out. Do not guess from its title.
 - Cite sources only by id, written exactly like [#3] or [#3][#7]. Never write URLs or titles, and only use ids from the list.
 
 Format (Markdown):
 - Start with an overview of 2-3 sentences with no heading: the single most important takeaway of the week.
-- Then "## Read first" with at most 3 bullets, each "- [#id] one sentence on why it is worth the reader's time".
+- Then "## Read first" with at most 3 bullets, each "- [#id] one sentence, drawn only from that item's own note, on why it is worth the reader's time".
 - Then one "## <theme title>" section per theme, each a single short paragraph (2-4 sentences) with citations.
 Respond with ONLY the briefing.
 
