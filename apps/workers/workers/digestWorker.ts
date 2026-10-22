@@ -13,6 +13,7 @@ import {
   prepareDigestItems,
   renderDigest,
   shouldWriteBriefing,
+  worthBriefing,
 } from "./utils/digestFormatter";
 
 import type { ZDigestRequest } from "@karakeep/shared-server";
@@ -175,9 +176,19 @@ async function buildDigestMarkdown(
     })),
   );
 
-  if (!shouldWriteBriefing(items.length)) {
+  // Pages that never loaded only have an error note; keep them out of the
+  // briefing so the model cannot build a theme from their titles. They are
+  // still listed under "Also saved".
+  const briefable = items.filter(worthBriefing);
+  if (briefable.length < items.length) {
     logger.info(
-      `[digest][${jobId}] Only ${items.length} item(s); using the plain digest.`,
+      `[digest][${jobId}] Leaving ${items.length - briefable.length} item(s) whose page failed to load out of the briefing.`,
+    );
+  }
+
+  if (!shouldWriteBriefing(briefable.length)) {
+    logger.info(
+      `[digest][${jobId}] Only ${briefable.length} usable item(s); using the plain digest.`,
     );
     return renderDigest(null, items);
   }
@@ -195,10 +206,10 @@ async function buildDigestMarkdown(
     columns: { inferredTagLang: true },
   });
 
-  const maxWords = digestWordBudget(items.length);
+  const maxWords = digestWordBudget(briefable.length);
   const { prompt, includedCount } = await buildDigestPrompt(
     userSettings?.inferredTagLang ?? serverConfig.inference.inferredTagLang,
-    items.map(formatItemForPrompt),
+    briefable.map(formatItemForPrompt),
     maxWords,
     serverConfig.inference.contextLength,
   );
@@ -209,7 +220,7 @@ async function buildDigestMarkdown(
       abortSignal,
     });
     logger.info(
-      `[digest][${jobId}] Edited ${includedCount}/${items.length} items using ${result.totalTokens} tokens.`,
+      `[digest][${jobId}] Edited ${includedCount}/${briefable.length} items (${items.length} saved) using ${result.totalTokens} tokens.`,
     );
     return renderDigest(result.response, items, maxWords);
   } catch (error) {

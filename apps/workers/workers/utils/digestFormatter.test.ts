@@ -6,10 +6,12 @@ import {
   digestWindowStart,
   digestWordBudget,
   formatItemForPrompt,
+  isFailedCrawlNote,
   normaliseUrl,
   prepareDigestItems,
   renderDigest,
   shouldWriteBriefing,
+  worthBriefing,
 } from "./digestFormatter";
 
 const row = (
@@ -118,6 +120,98 @@ describe("digestTitle", () => {
         new Date("2026-10-22T06:04:00Z"),
       ),
     ).toBe("Prasówka — 2026-10-19 to 2026-10-22");
+  });
+});
+
+describe("isFailedCrawlNote", () => {
+  // Openings of real stored notes for pages that never loaded.
+  const failed = [
+    "This page is experiencing technical difficulties and cannot be loaded. It is recommended to reload.",
+    "This page appears to be an error message, indicating that the content could not be loaded.",
+    'There is no content provided to summarize. The page appears to be an error message with a "404 Not Found" error.',
+    "This page is not loading due to technical issues, and the content cannot be viewed.",
+    "The page couldn't load, and an error message appeared, prompting the user to try reloading.",
+    "This article is not available to load due to technical issues, and it cannot be accessed.",
+    "The provided content appears to be a broken webpage, specifically the OpenAI GPT-6 Astra page.",
+    "This page is temporarily unavailable and cannot be loaded, with an option to reload.",
+    "Summary: The given content is a page that failed to load. It invites users to reload the page.",
+    "This page is unable to load, suggesting a technical issue with the content's access.",
+    "This webpage experienced technical difficulties and was unable to load its content.",
+    "Unfortunately, the content couldn't be loaded. The page couldn't be reloaded or accessed.",
+    "The content provided is an error page indicating that the blog post cannot be found.",
+    // Wordings found by auditing the stored notes for ones the first patterns missed.
+    "This page appears to be a failed load attempt, and users are advised to try reloading the page.",
+    "This page appears to be a loading error, resulting in a failure to load content.",
+    "This page appears to be a technical issue, preventing users from loading its content.",
+    "The provided content is a broken link to an OpenAI page. The content itself is unavailable due to a loading error.",
+    "There is no summary or content provided for the given text. The text appears to be a basic webpage template.",
+    "This webpage appears to be having issues loading, resulting in a blank content page.",
+    "This page appears to be a failed attempt to load content. The user is prompted to reload the page.",
+    "Unfortunately, the provided content is a failed load page and does not contain a summary.",
+    "This page appears to be loading issues, preventing the content from being displayed.",
+    "The content is a technical error page that prevents the page from loading. The user is advised to reload.",
+  ];
+  test.each(failed)("recognises a failed page: %s", (note) => {
+    expect(isFailedCrawlNote(note)).toBe(true);
+  });
+
+  const fine = [
+    "Learn how OpenAI built ChatGPT's LLM-powered ad stack to understand conversational intent and keep ads separate from answers.",
+    "This article explains how to fix technical issues in Kubernetes clusters and handle 404 errors gracefully.",
+    "A walkthrough of building a retry policy for services that fail to respond when a dependency is down.",
+    "NVIDIA Kumo Forecast merges pretrained Transformer representations with historical pattern retrieval.",
+    "The SWE-Lancer benchmark is a dataset of 1,400 freelance software engineering tasks valued at $1 million.",
+    "This report provides 10 mechanisms to improve the verifiability of claims made about AI systems.",
+    // Real articles that merely mention an error message (found auditing the stored notes).
+    "An OpenAI account was used to generate a fake error message claiming a Russian troll had used up its credits, which went viral.",
+    "This is a technical article about a bug found in a Kubernetes-based application. The bug caused the application to crash with a specific type of error message.",
+  ];
+  test.each(fine)("leaves a normal note alone: %s", (note) => {
+    expect(isFailedCrawlNote(note)).toBe(false);
+  });
+
+  test("treats a missing note as not failed", () => {
+    expect(isFailedCrawlNote(null)).toBe(false);
+    expect(isFailedCrawlNote("")).toBe(false);
+  });
+
+  test("only looks at the opening, so a long article mentioning errors later is kept", () => {
+    const note = `${"A long and useful summary of a deployment guide. ".repeat(8)}Section 9 covers the error page for 404 handling.`;
+    expect(isFailedCrawlNote(note)).toBe(false);
+  });
+});
+
+describe("worthBriefing and failed pages", () => {
+  const items = prepareDigestItems([
+    row("Good post", "https://a.com/1", "A real summary of the post."),
+    row(
+      "Bio agents",
+      "https://b.com/2",
+      "This page is experiencing technical difficulties and cannot be loaded.",
+    ),
+    row("Title only", "https://c.com/3", null),
+  ]);
+
+  test("keeps real notes and title-only items, drops failed pages", () => {
+    expect(items.filter(worthBriefing).map((i) => i.title)).toEqual([
+      "Good post",
+      "Title only",
+    ]);
+  });
+
+  test("a failed page is still listed under Also saved when the model never saw it", () => {
+    const out = renderDigest(
+      "A solid overview of the week [#1] and what matters in it.",
+      items,
+    );
+    expect(out).toContain("- [Bio agents](https://b.com/2)");
+  });
+
+  test("the plain digest does not print a failed page's error note", () => {
+    const out = renderDigest(null, items);
+    expect(out).toContain("[Bio agents](https://b.com/2)");
+    expect(out).not.toContain("technical difficulties");
+    expect(out).toContain("A real summary of the post.");
   });
 });
 

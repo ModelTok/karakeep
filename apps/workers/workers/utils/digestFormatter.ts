@@ -29,6 +29,43 @@ export function shouldWriteBriefing(itemCount: number): boolean {
   return itemCount >= MIN_ITEMS_FOR_BRIEFING;
 }
 
+// How a stored note reads when the page behind it never loaded: the summariser
+// described the error page instead. About one note in six looks like this
+// (mostly sites that block the crawler), and the briefing model would
+// otherwise build themes from such an item's title alone.
+const FAILED_CRAWL_PATTERNS = [
+  // "is / appears to be an error page", not an article that merely mentions one
+  /\b(?:is|are|was|appears? to be|seems? to be)\s+(?:an?\s+)?(?:(?:technical|generic|standard|server|http|browser|blank|general)\s+)?(?:error (?:page|message)|broken (?:web)?page)\b|\btemporarily unavailable\b/i,
+  /\bexperienc\w* technical\b/i,
+  /\b(?:cannot|can['’]t|could not|couldn['’]t|unable to|fail(?:s|ed|ing)? to)\s+(?:be\s+)?(?:load(?:ed)?|accessed|display(?:ed)?)\b/i,
+  /\bnot (?:loading|available to load)\b/i,
+  /\bno (?:summary or )?content (?:was |is )?(?:provided|available|to summari[sz]e)\b/i,
+  /\b404\b[^.]{0,30}\bnot found\b/i,
+  /\bfailed (?:load|attempt to load)\b/i,
+  /\bloading (?:error|issues?|failure)\b|\b(?:issues?|trouble|problems?) (?:with )?loading\b/i,
+  /\bpreventing\b[^.]{0,40}\bload/i,
+  /\bbroken link\b/i,
+];
+const FAILED_CRAWL_LOOKAHEAD = 220;
+
+/**
+ * Whether a note describes a page that failed to load. Only the opening is
+ * checked, since that is where the summariser says so. A false positive is
+ * cheap: the item just stays out of the briefing and is still listed.
+ */
+export function isFailedCrawlNote(note: string | null | undefined): boolean {
+  const head = note
+    ?.replace(/\s+/g, " ")
+    .trim()
+    .slice(0, FAILED_CRAWL_LOOKAHEAD);
+  return !!head && FAILED_CRAWL_PATTERNS.some((p) => p.test(head));
+}
+
+/** Items whose page never loaded are listed, but not offered to the model. */
+export function worthBriefing(item: DigestItem): boolean {
+  return !isFailedCrawlNote(item.summary);
+}
+
 /**
  * Where this digest's window starts: right after the previous digest, so
  * nothing is missed or repeated however the run is timed. Without a previous
@@ -337,7 +374,9 @@ function alsoSaved(items: DigestItem[]): string {
 function plainFallback(items: DigestItem[]): string {
   const highlights = items.slice(0, FALLBACK_HIGHLIGHTS);
   const lines = highlights.map((item) => {
-    const summary = condense(item.summary, SUMMARY_CHARS_FALLBACK);
+    const summary = isFailedCrawlNote(item.summary)
+      ? null
+      : condense(item.summary, SUMMARY_CHARS_FALLBACK);
     return `- ${link(item.title, item.url)}${summary ? ` — ${summary}` : ""}`;
   });
   const parts = [
