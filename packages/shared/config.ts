@@ -78,6 +78,7 @@ const allEnv = z.object({
     .optional(),
   OLLAMA_BASE_URL: z.string().url().optional(),
   OLLAMA_KEEP_ALIVE: z.string().optional(),
+  OLLAMA_THINK: z.enum(["true", "false"]).optional(),
   CHAT_ENABLED: stringBool("false"),
   CHAT_MODEL: z.string().optional(),
   SEMANTIC_SEARCH_ENABLED: stringBool("true"),
@@ -364,6 +365,10 @@ const serverConfigSchema = allEnv.transform((val, ctx) => {
       openAIReasoningEffort: val.OPENAI_REASONING_EFFORT,
       ollamaBaseUrl: val.OLLAMA_BASE_URL,
       ollamaKeepAlive: val.OLLAMA_KEEP_ALIVE,
+      ollamaThink:
+        val.OLLAMA_THINK === undefined
+          ? undefined
+          : val.OLLAMA_THINK === "true",
       chatModel: val.CHAT_MODEL ?? val.INFERENCE_TEXT_MODEL,
       textModel: val.INFERENCE_TEXT_MODEL,
       imageModel: val.INFERENCE_IMAGE_MODEL,

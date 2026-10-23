@@ -678,11 +678,11 @@
     "digest": {
       "digest": "Digest",
       "page_title": "Digest",
-      "page_description": "Get a weekly Prasówka digest of everything you've saved in the last 7 days, delivered as a new bookmark in a \"Prasówka\" list.",
+      "page_description": "Get a daily Prasówka digest of everything you've saved since the previous one, delivered as a new bookmark in a \"Prasówka\" list.",
       "configuration": {
         "title": "Digest Configuration",
-        "enable_digest": "Enable Weekly Digest",
-        "enable_digest_description": "Every Monday, create a digest bookmark summarizing links you've saved in the last 7 days",
+        "enable_digest": "Enable Daily Digest",
+        "enable_digest_description": "Every morning (06:00 UTC), create a digest bookmark summarizing links you've saved since the previous digest",
         "send_now": "Send Digest Now",
         "save_settings": "Save Settings"
       },

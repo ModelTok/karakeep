@@ -19,6 +19,74 @@ const SUMMARY_CHARS_FOR_PROMPT = 280;
 const SUMMARY_CHARS_FALLBACK = 160;
 const FALLBACK_HIGHLIGHTS = 8;
 const ALSO_SAVED_LIMIT = 25;
+// Below this a "briefing" has nothing to synthesise; a plain list serves better
+// and saves a model call.
+const MIN_ITEMS_FOR_BRIEFING = 4;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_WINDOW_MS = 7 * DAY_MS;
+
+export function shouldWriteBriefing(itemCount: number): boolean {
+  return itemCount >= MIN_ITEMS_FOR_BRIEFING;
+}
+
+// How a stored note reads when the page behind it never loaded: the summariser
+// described the error page instead. About one note in six looks like this
+// (mostly sites that block the crawler), and the briefing model would
+// otherwise build themes from such an item's title alone.
+const FAILED_CRAWL_PATTERNS = [
+  // "is / appears to be an error page", not an article that merely mentions one
+  /\b(?:is|are|was|appears? to be|seems? to be)\s+(?:an?\s+)?(?:(?:technical|generic|standard|server|http|browser|blank|general)\s+)?(?:error (?:page|message)|broken (?:web)?page)\b|\btemporarily unavailable\b/i,
+  /\bexperienc\w* technical\b/i,
+  /\b(?:cannot|can['’]t|could not|couldn['’]t|unable to|fail(?:s|ed|ing)? to)\s+(?:be\s+)?(?:load(?:ed)?|accessed|display(?:ed)?)\b/i,
+  /\bnot (?:loading|available to load)\b/i,
+  /\bno (?:summary or )?content (?:was |is )?(?:provided|available|to summari[sz]e)\b/i,
+  /\b404\b[^.]{0,30}\bnot found\b/i,
+  /\bfailed (?:load|attempt to load)\b/i,
+  /\bloading (?:error|issues?|failure)\b|\b(?:issues?|trouble|problems?) (?:with )?loading\b/i,
+  /\bpreventing\b[^.]{0,40}\bload/i,
+  /\bbroken link\b/i,
+];
+const FAILED_CRAWL_LOOKAHEAD = 220;
+
+/**
+ * Whether a note describes a page that failed to load. Only the opening is
+ * checked, since that is where the summariser says so. A false positive is
+ * cheap: the item just stays out of the briefing and is still listed.
+ */
+export function isFailedCrawlNote(note: string | null | undefined): boolean {
+  const head = note
+    ?.replace(/\s+/g, " ")
+    .trim()
+    .slice(0, FAILED_CRAWL_LOOKAHEAD);
+  return !!head && FAILED_CRAWL_PATTERNS.some((p) => p.test(head));
+}
+
+/** Items whose page never loaded are listed, but not offered to the model. */
+export function worthBriefing(item: DigestItem): boolean {
+  return !isFailedCrawlNote(item.summary);
+}
+
+/**
+ * Where this digest's window starts: right after the previous digest, so
+ * nothing is missed or repeated however the run is timed. Without a previous
+ * digest it is the last day; after a long gap it is capped at a week.
+ */
+export function digestWindowStart(lastDigestAt: Date | null, now: Date): Date {
+  const earliest = new Date(now.getTime() - MAX_WINDOW_MS);
+  const start = lastDigestAt ?? new Date(now.getTime() - DAY_MS);
+  return start < earliest ? earliest : start;
+}
+
+const isoDate = (d: Date): string => d.toISOString().split("T")[0];
+
+export function digestTitle(name: string, start: Date, end: Date): string {
+  const from = isoDate(start);
+  const to = isoDate(end);
+  // A window of about a day (allowing for run-time jitter) is just "today's" digest.
+  return end.getTime() - start.getTime() <= DAY_MS + 60 * 60 * 1000
+    ? `${name} — ${to}`
+    : `${name} — ${from} to ${to}`;
+}
 
 function getDomain(url: string): string {
   try {
@@ -149,6 +217,89 @@ function stripCodeFence(text: string): string {
 
 const CITATION_RUN = /(?:\[#\d+\]\s*)+/g;
 
+const HEADING = /^#{1,6}\s+(.*?)\s*#*\s*$/;
+const STARTS_WITH_CITATION = /^\s*(?:[-*]\s+)?\**\s*\[#\d+\]/;
+
+function wordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Small models tack on things the prompt forbids: a title or "Overview"
+ * heading, a re-listing of the items, a generic conclusion. Cut those, but
+ * hand the text back untouched if that would leave next to nothing.
+ */
+function trimModelExtras(text: string): string {
+  let lines = text.split("\n");
+
+  // A title line before the overview.
+  const first = lines.findIndex((l) => l.trim() !== "");
+  if (first >= 0) {
+    const l = lines[first].trim();
+    const heading = l.match(HEADING)?.[1] ?? "";
+    if (
+      /^\*\*[^*]+\*\*:?$/.test(l) ||
+      /^(overview|summary|key takeaways?|(the )?(daily |weekly )?briefing\b.*|the (week|day)\b.*)$/i.test(
+        heading,
+      )
+    ) {
+      lines = lines.slice(first + 1);
+    }
+  }
+
+  // A closing section: from its heading to the next heading, or the end.
+  const out: string[] = [];
+  let skipping = false;
+  for (const l of lines) {
+    const heading = l.trim().match(HEADING)?.[1];
+    if (heading !== undefined) {
+      skipping = /^(in )?(conclusion|final thoughts|closing thoughts)\b/i.test(
+        heading,
+      );
+    }
+    if (!skipping) {
+      out.push(l);
+    }
+  }
+  lines = out;
+
+  // A list of items re-typed at the very end, plus its label. A trailing
+  // "Read first" list is the one legitimate list, so leave that alone.
+  let end = lines.length;
+  while (end > 0 && lines[end - 1].trim() === "") {
+    end--;
+  }
+  let start = end;
+  while (
+    start > 0 &&
+    (STARTS_WITH_CITATION.test(lines[start - 1]) ||
+      lines[start - 1].trim() === "")
+  ) {
+    start--;
+  }
+  if (start < end) {
+    let section = "";
+    for (let i = start - 1; i >= 0; i--) {
+      const h = lines[i].trim().match(HEADING)?.[1];
+      if (h !== undefined) {
+        section = h;
+        break;
+      }
+    }
+    if (!/read first/i.test(section)) {
+      const label = lines[start - 1]?.trim() ?? "";
+      const isLabel =
+        label.length > 0 &&
+        label.length <= 60 &&
+        (/^\*\*.+\*\*:?$/.test(label) || label.endsWith(":"));
+      lines = lines.slice(0, isLabel ? start - 1 : start);
+    }
+  }
+
+  const cleaned = lines.join("\n").trim();
+  return cleaned.length < 40 ? text : cleaned;
+}
+
 /**
  * Replace the model's [#id] citations with real links: a bullet that opens
  * with a citation becomes a bold title link, any other run of citations becomes
@@ -180,7 +331,8 @@ function resolveCitations(
   return body
     .split("\n")
     .map((line) => {
-      const bullet = line.match(/^(\s*[-*]\s+)((?:\[#\d+\]\s*)+)(.*)$/);
+      // Models like to bold the citation, e.g. "- **[#2] Title:** why".
+      const bullet = line.match(/^(\s*[-*]\s+)\**\s*((?:\[#\d+\]\s*)+)(.*)$/);
       if (!bullet) {
         return inline(line);
       }
@@ -190,7 +342,16 @@ function resolveCitations(
       }
       cited.add(first.id);
       others.forEach((i) => cited.add(i.id));
-      const reason = inline(bullet[3].replace(/^[\s—–:-]+/, ""));
+      // Drop leftover bold markers and a title the model echoed back.
+      let rest = bullet[3].replace(/\*\*/g, "").trimStart();
+      if (rest.toLowerCase().startsWith(first.title.toLowerCase())) {
+        rest = rest.slice(first.title.length).trimStart();
+        // ...and the "(domain)" the prompt format invites after the title.
+        if (rest.toLowerCase().startsWith(`(${first.domain.toLowerCase()})`)) {
+          rest = rest.slice(first.domain.length + 2);
+        }
+      }
+      const reason = inline(rest.replace(/^[\s—–:-]+/, ""));
       const title = `**${link(first.title, first.url)}**`;
       return `${bullet[1]}${title}${reason ? ` — ${reason}` : ""}`;
     })
@@ -205,9 +366,7 @@ function alsoSaved(items: DigestItem[]): string {
     .slice(0, ALSO_SAVED_LIMIT)
     .map((i) => `- ${link(i.title, i.url)}`);
   if (items.length > ALSO_SAVED_LIMIT) {
-    shown.push(
-      `- …and ${items.length - ALSO_SAVED_LIMIT} more saved this week.`,
-    );
+    shown.push(`- …and ${items.length - ALSO_SAVED_LIMIT} more saved.`);
   }
   return `## Also saved\n\n${shown.join("\n")}`;
 }
@@ -215,11 +374,13 @@ function alsoSaved(items: DigestItem[]): string {
 function plainFallback(items: DigestItem[]): string {
   const highlights = items.slice(0, FALLBACK_HIGHLIGHTS);
   const lines = highlights.map((item) => {
-    const summary = condense(item.summary, SUMMARY_CHARS_FALLBACK);
+    const summary = isFailedCrawlNote(item.summary)
+      ? null
+      : condense(item.summary, SUMMARY_CHARS_FALLBACK);
     return `- ${link(item.title, item.url)}${summary ? ` — ${summary}` : ""}`;
   });
   const parts = [
-    `${items.length} ${items.length === 1 ? "link" : "links"} saved this week.`,
+    `${items.length} ${items.length === 1 ? "link" : "links"} saved since the last digest.`,
     lines.join("\n"),
   ];
   const rest = alsoSaved(items.slice(FALLBACK_HIGHLIGHTS));
@@ -238,18 +399,29 @@ function plainFallback(items: DigestItem[]): string {
 export function renderDigest(
   modelOutput: string | null,
   items: DigestItem[],
+  maxWords?: number,
 ): string {
   if (!modelOutput) {
     return plainFallback(items);
   }
 
   const byId = new Map(items.map((i) => [i.id, i]));
+  const text = trimModelExtras(stripCodeFence(modelOutput));
+
+  // A model that blows well past the word limit has usually ignored the brief
+  // and started enumerating, or it hit the output cap mid-sentence.
+  if (maxWords !== undefined && wordCount(text) > maxWords * 2) {
+    return plainFallback(items);
+  }
+  // Mostly invented ids means the model is not describing these items.
+  const ids = [...text.matchAll(/\[#(\d+)\]/g)].map((m) => Number(m[1]));
+  const invented = ids.filter((id) => !byId.has(id)).length;
+  if (invented > ids.length - invented) {
+    return plainFallback(items);
+  }
+
   const cited = new Set<number>();
-  const body = resolveCitations(
-    stripCodeFence(modelOutput),
-    byId,
-    cited,
-  ).trim();
+  const body = resolveCitations(text, byId, cited).trim();
 
   // No usable citations means the model ignored the format; don't ship it.
   if (cited.size === 0 || body.length < 40) {
