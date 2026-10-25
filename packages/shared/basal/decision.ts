@@ -14,6 +14,27 @@ export const USEFULNESS_QUESTION = {
   ],
 } as const;
 
+// Feed-level question. Feed ratings train it; the state is a feed summary
+// built by buildBasalFeedState, not an article.
+export const FEED_VALUE_QUESTION = {
+  type: "score",
+  instructions:
+    "Jak wartościowe jest źródło jako całość dla Pawła (AEC/BIM/HVAC, AI, narzędzia inżynierskie)?",
+  criteria: [
+    "slaby - feed publikuje głównie szum, marketing albo treści poza obszarem zainteresowań.",
+    "sredni - feed bywa w temacie, ale wpisy są ogólne lub rzadko wnoszą coś nowego.",
+    "ciekawy - feed regularnie publikuje konkretne, wartościowe materiały warte czytania.",
+  ],
+} as const;
+
+export interface BasalQuestion {
+  type: "score";
+  instructions: string;
+  criteria: string[];
+}
+
+export type BasalQuestionName = "usefulness" | "feed_value";
+
 export interface BasalDecisionSettings {
   autoArchive: boolean;
   archiveThreshold: number;

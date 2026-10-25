@@ -1143,7 +1143,7 @@ export const basalJobsTable = sqliteTable(
     userId: text("userId")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    type: text("type", { enum: ["score", "train"] }).notNull(),
+    type: text("type", { enum: ["score", "train", "score_feeds"] }).notNull(),
     status: text("status", {
       enum: ["queued", "running", "success", "failure"],
     }).notNull(),

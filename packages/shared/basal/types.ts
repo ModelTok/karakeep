@@ -39,6 +39,15 @@ export const zBasalHealth = z.object({
 });
 export type BasalHealth = z.infer<typeof zBasalHealth>;
 
+// Question sent with POST /score; mirrors BasalQuestion in decision.ts.
+export const zBasalQuestion = z.object({
+  type: z.literal("score"),
+  instructions: z.string(),
+  criteria: z.array(z.string()),
+});
+
+export const zBasalQuestionName = z.enum(["usefulness", "feed_value"]);
+
 // POST /score
 export const zBasalScoreItem = z.object({
   id: z.string(),
@@ -58,6 +67,20 @@ export const zBasalScoreResult = z.object({
   latency_ms: z.number(),
 });
 export type BasalScoreResult = z.infer<typeof zBasalScoreResult>;
+
+// Feed-level score result: the item id is the RSS feed id.
+export const zBasalFeedScoreResult = zBasalScoreResult
+  .omit({ id: true })
+  .extend({ feedId: z.string() });
+export type BasalFeedScoreResult = z.infer<typeof zBasalFeedScoreResult>;
+
+export function toFeedScoreResult(
+  result: BasalScoreResult,
+  feedId: string,
+): BasalFeedScoreResult {
+  const { id: _id, ...rest } = result;
+  return { ...rest, feedId };
+}
 
 export const zBasalScoreResponse = z.object({
   results: z.array(zBasalScoreResult),
@@ -95,6 +118,11 @@ export const zBasalStoredScore = z.object({
   calibrationId: z.string().nullable(),
 });
 export type BasalStoredScore = z.infer<typeof zBasalStoredScore>;
+
+export const zBasalFeedStoredScore = zBasalStoredScore.extend({
+  stateKind: z.string(),
+});
+export type BasalFeedStoredScore = z.infer<typeof zBasalFeedStoredScore>;
 
 export function toStoredScore(result: BasalScoreResult): BasalStoredScore {
   return {

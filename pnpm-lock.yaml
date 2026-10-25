@@ -1671,6 +1671,8 @@ importers:
         specifier: ^22.0.0
         version: 22.0.2
 
+  tools/basal-bridge: {}
+
   tools/compare-models:
     dependencies:
       '@karakeep/sdk':

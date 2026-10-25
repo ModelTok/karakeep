@@ -33,6 +33,12 @@ function cleanMultiline(value: string | null | undefined): string {
     .trim();
 }
 
+function capState(state: string): string {
+  return state.length > BASAL_STATE_CHAR_CAP
+    ? state.slice(0, BASAL_STATE_CHAR_CAP)
+    : state;
+}
+
 /**
  * Builds the labelled text block the engine scores. The labels are Polish on
  * purpose: they are model input, not UI copy. Pure function.
@@ -65,14 +71,60 @@ export function buildBasalState(input: BasalStateInput): BasalState {
   if (text) {
     state += `\nTreść: ${text}`;
   }
-  if (state.length > BASAL_STATE_CHAR_CAP) {
-    state = state.slice(0, BASAL_STATE_CHAR_CAP);
-  }
+  state = capState(state);
 
   const stateKind: BasalStateKind =
     text || summary || description ? "full" : "title_only";
 
   return { state, stateKind, chars: state.length };
+}
+
+// Number of most recent headlines included in a feed summary.
+export const BASAL_FEED_HEADLINE_COUNT = 10;
+
+// Value stored in the stateKind column for feed scores.
+export const BASAL_FEED_STATE_KIND = "feed_summary";
+
+export interface BasalFeedStateInput {
+  name: string;
+  url: string;
+  description?: string | null;
+  headlines: string[];
+}
+
+/**
+ * Builds the feed summary the engine scores with the feed_value question.
+ * Polish labels for the same reason as buildBasalState. Pure function.
+ */
+export function buildBasalFeedState(input: BasalFeedStateInput): {
+  state: string;
+  chars: number;
+} {
+  const name = clean(input.name);
+  const url = clean(input.url);
+  const description = clean(input.description);
+  const headlines = input.headlines
+    .map(clean)
+    .filter((h) => h.length > 0)
+    .slice(0, BASAL_FEED_HEADLINE_COUNT);
+
+  const lines: string[] = [];
+  if (name) {
+    lines.push(`Feed: ${name}`);
+  }
+  if (url) {
+    lines.push(`URL: ${url}`);
+  }
+  if (description) {
+    lines.push(`Opis: ${description}`);
+  }
+  if (headlines.length > 0) {
+    lines.push("Ostatnie nagłówki:");
+    lines.push(...headlines.map((h) => `- ${h}`));
+  }
+
+  const state = capState(lines.join("\n"));
+  return { state, chars: state.length };
 }
 
 /** Hostname without a leading "www.", or "" for unparsable URLs. */

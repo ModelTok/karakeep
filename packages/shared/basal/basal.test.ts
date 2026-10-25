@@ -6,15 +6,27 @@ import {
   BasalUnavailableError,
   mockProbabilities,
 } from "./client";
-import { buildDataset, buildLabelledRequest, groupFor } from "./dataset";
 import {
+  buildDataset,
+  buildFeedLabelledRequest,
+  buildLabelledRequest,
+  groupFor,
+} from "./dataset";
+import {
+  FEED_VALUE_QUESTION,
   isScoreStale,
   isWeakByThreshold,
   labelFromAnswer,
   shouldAutoArchive,
   USEFULNESS_QUESTION,
 } from "./decision";
-import { BASAL_STATE_CHAR_CAP, buildBasalState } from "./state";
+import {
+  BASAL_FEED_HEADLINE_COUNT,
+  BASAL_FEED_STATE_KIND,
+  BASAL_STATE_CHAR_CAP,
+  buildBasalFeedState,
+  buildBasalState,
+} from "./state";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -108,6 +120,45 @@ describe("BasalClient errors", () => {
     expect(fetchImpl.mock.calls[0][0]).toBe("http://bridge.test/score");
     expect(res.results[0].id).toBe("b1");
     expect(res.mock).toBeUndefined();
+    expect(JSON.parse(fetchImpl.mock.calls[0][1]!.body as string)).toEqual({
+      items: [{ id: "b1", state: "s" }],
+    });
+  });
+
+  test("score sends question and questionName when provided", async () => {
+    const fetchImpl = vi.fn(
+      (_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(Response.json({ results: [] })),
+    );
+    const client = new BasalClient({
+      baseUrl: "http://bridge.test",
+      mock: false,
+      fetchImpl,
+    });
+    const question = {
+      type: FEED_VALUE_QUESTION.type,
+      instructions: FEED_VALUE_QUESTION.instructions,
+      criteria: [...FEED_VALUE_QUESTION.criteria],
+    };
+    await client.score([{ id: "f1", state: "Feed: X" }], {
+      question,
+      questionName: "feed_value",
+    });
+    await client.score([{ id: "f2", state: "Feed: Y" }], {
+      questionName: "feed_value",
+    });
+    const bodies = fetchImpl.mock.calls.map(
+      (call) => JSON.parse(call[1]!.body as string) as unknown,
+    );
+    expect(bodies[0]).toEqual({
+      items: [{ id: "f1", state: "Feed: X" }],
+      question,
+      questionName: "feed_value",
+    });
+    expect(bodies[1]).toEqual({
+      items: [{ id: "f2", state: "Feed: Y" }],
+      questionName: "feed_value",
+    });
   });
 });
 
@@ -185,6 +236,61 @@ describe("buildBasalState", () => {
   });
 });
 
+describe("buildBasalFeedState", () => {
+  test("formats name, url, description and headlines", () => {
+    const s = buildBasalFeedState({
+      name: "  BIM   Blog ",
+      url: "https://bim.example.com/feed",
+      description: "Nowości\n o  BIM",
+      headlines: ["Revit 2027", "   ", "IFC  5\nwydane"],
+    });
+    expect(s.state).toBe(
+      [
+        "Feed: BIM Blog",
+        "URL: https://bim.example.com/feed",
+        "Opis: Nowości o BIM",
+        "Ostatnie nagłówki:",
+        "- Revit 2027",
+        "- IFC 5 wydane",
+      ].join("\n"),
+    );
+    expect(s.chars).toBe(s.state.length);
+    expect(BASAL_FEED_STATE_KIND).toBe("feed_summary");
+  });
+
+  test("omits empty description and headline block", () => {
+    const s = buildBasalFeedState({
+      name: "Feed X",
+      url: "https://x.example.com",
+      description: null,
+      headlines: [],
+    });
+    expect(s.state).toBe("Feed: Feed X\nURL: https://x.example.com");
+  });
+
+  test("keeps only the first BASAL_FEED_HEADLINE_COUNT headlines", () => {
+    const headlines = Array.from({ length: 15 }, (_, i) => `H${i + 1}`);
+    const s = buildBasalFeedState({ name: "F", url: "u", headlines });
+    expect(BASAL_FEED_HEADLINE_COUNT).toBe(10);
+    const listed = s.state.split("\n").filter((l) => l.startsWith("- "));
+    expect(listed).toHaveLength(BASAL_FEED_HEADLINE_COUNT);
+    expect(listed[0]).toBe("- H1");
+    expect(listed[9]).toBe("- H10");
+    expect(s.state).not.toContain("H11");
+  });
+
+  test("truncates to BASAL_STATE_CHAR_CAP", () => {
+    const s = buildBasalFeedState({
+      name: "F",
+      url: "u",
+      description: "d".repeat(50_000),
+      headlines: ["h"],
+    });
+    expect(s.chars).toBe(BASAL_STATE_CHAR_CAP);
+    expect(s.state.startsWith("Feed: F\nURL: u\nOpis: ddd")).toBe(true);
+  });
+});
+
 describe("dataset", () => {
   test("buildLabelledRequest uses the shared question and gold rating", () => {
     const r = buildLabelledRequest({
@@ -232,6 +338,104 @@ describe("dataset", () => {
       ["1", 0],
       ["3", 1],
     ]);
+  });
+
+  test("buildLabelledRequest adds feed_value only with a feedRating", () => {
+    const base = { id: "b1", group: "feed:f1", state: "s", rating: 1 as const };
+    expect(buildLabelledRequest(base).questions.feed_value).toBeUndefined();
+    expect(
+      buildLabelledRequest({ ...base, feedRating: null }).questions,
+    ).not.toHaveProperty("feed_value");
+    const r = buildLabelledRequest({ ...base, feedRating: 0 });
+    expect(r.questions.usefulness.gold).toBe(1);
+    expect(r.questions.feed_value).toEqual({
+      type: "score",
+      instructions: FEED_VALUE_QUESTION.instructions,
+      criteria: [...FEED_VALUE_QUESTION.criteria],
+      gold: 0,
+    });
+  });
+
+  test("buildFeedLabelledRequest carries only feed_value", () => {
+    const r = buildFeedLabelledRequest({
+      id: "feed:f1",
+      group: "feed:f1",
+      state: "Feed: X",
+      rating: 2,
+    });
+    expect(r).toEqual({
+      id: "feed:f1",
+      group: "feed:f1",
+      state: "Feed: X",
+      questions: {
+        feed_value: {
+          type: "score",
+          instructions: FEED_VALUE_QUESTION.instructions,
+          criteria: [...FEED_VALUE_QUESTION.criteria],
+          gold: 2,
+        },
+      },
+    });
+    expect(Object.keys(r.questions)).toEqual(["feed_value"]);
+  });
+
+  test("buildDataset counts articles, feed questions and standalone feeds", () => {
+    const result = buildDataset(
+      [
+        {
+          id: "1",
+          group: "feed:f1",
+          state: "a",
+          stateKind: "full",
+          rating: 0,
+          feedRating: 2,
+        },
+        {
+          id: "2",
+          group: "feed:f1",
+          state: "b",
+          stateKind: "title_only",
+          rating: 1,
+          feedRating: 2,
+        },
+        {
+          id: "3",
+          group: "domain:x",
+          state: "c",
+          stateKind: "full",
+          rating: 1,
+        },
+      ],
+      [{ id: "feed:f1", group: "feed:f1", state: "Feed: F1", rating: 2 }],
+    );
+    expect(result.articles).toBe(2);
+    expect(result.feedQuestions).toBe(1);
+    expect(result.standaloneFeeds).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(result.lines).toHaveLength(3);
+    const parsed = result.lines.map(
+      (l) =>
+        JSON.parse(l) as {
+          id: string;
+          questions: Record<string, { gold: number }>;
+        },
+    );
+    expect(parsed.map((p) => p.id)).toEqual(["1", "3", "feed:f1"]);
+    expect(parsed[0].questions.feed_value.gold).toBe(2);
+    expect(parsed[1].questions).not.toHaveProperty("feed_value");
+    expect(Object.keys(parsed[2].questions)).toEqual(["feed_value"]);
+  });
+
+  test("buildDataset without feed entries keeps zero feed counts", () => {
+    const result = buildDataset([
+      { id: "1", group: "g", state: "a", stateKind: "full", rating: 0 },
+    ]);
+    expect(result).toMatchObject({
+      articles: 1,
+      feedQuestions: 0,
+      standaloneFeeds: 0,
+      skipped: 0,
+    });
   });
 
   test("groupFor prefers feed over domain", () => {

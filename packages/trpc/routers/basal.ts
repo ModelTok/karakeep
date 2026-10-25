@@ -1,9 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { and, count, desc, eq, isNull, ne, or } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, ne, or } from "drizzle-orm";
 import { z } from "zod";
 
 import {
   basalCalibrationsTable,
+  basalFeedRatingsTable,
+  basalFeedScoresTable,
   basalJobsTable,
   basalRatingsTable,
   basalScoresTable,
@@ -12,10 +14,18 @@ import {
   rssFeedImportsTable,
   rssFeedsTable,
 } from "@karakeep/db/schema";
-import { isWeakByThreshold } from "@karakeep/shared/basal/decision";
-import type { BasalHealth } from "@karakeep/shared/basal/types";
+import {
+  isScoreStale,
+  isWeakByThreshold,
+} from "@karakeep/shared/basal/decision";
+import type {
+  BasalHealth,
+  BasalLabel,
+  BasalRating,
+} from "@karakeep/shared/basal/types";
 import { ratingToLabel, zBasalRating } from "@karakeep/shared/basal/types";
 
+import type { AuthedContext } from "../index";
 import { router, sessionProcedure } from "../index";
 import {
   BASAL_MAX_ITEMS_CAP,
@@ -25,12 +35,33 @@ import {
   getBasalSettings,
   reconcileStaleBasalJobs,
   selectUnscoredBookmarks,
+  startBasalScoreFeedsJob,
   startBasalScoreJob,
   startBasalTrainJob,
 } from "../lib/basalJobs";
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
+
+// Max ids accepted by ratingsForBookmarks (one grid page).
+const RATINGS_FOR_BOOKMARKS_CAP = 200;
+// Feed quality falls back from article scores only below this many.
+const FEED_QUALITY_MIN_SCORED = 10;
+
+async function getActiveCalibrationId(
+  db: AuthedContext["db"],
+  userId: string,
+): Promise<string | null> {
+  const active = await db.query.basalCalibrationsTable.findFirst({
+    where: and(
+      eq(basalCalibrationsTable.userId, userId),
+      eq(basalCalibrationsTable.active, true),
+    ),
+    orderBy: desc(basalCalibrationsTable.createdAt),
+    columns: { id: true },
+  });
+  return active?.id ?? null;
+}
 
 // Basal is a UI feature: session auth only, no API keys.
 export const basalAppRouter = router({
@@ -113,6 +144,16 @@ export const basalAppRouter = router({
       .from(rssFeedsTable)
       .where(eq(rssFeedsTable.userId, userId));
 
+    const [{ feedRatings }] = await db
+      .select({ feedRatings: count() })
+      .from(basalFeedRatingsTable)
+      .where(eq(basalFeedRatingsTable.userId, userId));
+
+    const [{ feedsScored }] = await db
+      .select({ feedsScored: count() })
+      .from(basalFeedScoresTable)
+      .where(eq(basalFeedScoresTable.userId, userId));
+
     const runningJob = await db.query.basalJobsTable.findFirst({
       where: and(
         eq(basalJobsTable.userId, userId),
@@ -152,6 +193,8 @@ export const basalAppRouter = router({
         stale,
         unscored,
         feeds,
+        feedRatings,
+        feedsScored,
       },
       settings: await getBasalSettings(db, userId),
       runningJob: runningJob
@@ -220,6 +263,144 @@ export const basalAppRouter = router({
       };
     }),
 
+  rateFeed: sessionProcedure
+    .input(
+      z.object({
+        feedId: z.string(),
+        rating: zBasalRating.nullable(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.user.id;
+      const feed = await ctx.db.query.rssFeedsTable.findFirst({
+        where: and(
+          eq(rssFeedsTable.id, input.feedId),
+          eq(rssFeedsTable.userId, userId),
+        ),
+        columns: { id: true },
+      });
+      if (!feed) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Feed not found",
+        });
+      }
+
+      if (input.rating === null) {
+        await ctx.db
+          .delete(basalFeedRatingsTable)
+          .where(
+            and(
+              eq(basalFeedRatingsTable.userId, userId),
+              eq(basalFeedRatingsTable.feedId, input.feedId),
+            ),
+          );
+        return null;
+      }
+
+      const [row] = await ctx.db
+        .insert(basalFeedRatingsTable)
+        .values({
+          userId,
+          feedId: input.feedId,
+          rating: input.rating,
+        })
+        .onConflictDoUpdate({
+          target: [basalFeedRatingsTable.userId, basalFeedRatingsTable.feedId],
+          set: { rating: input.rating, modifiedAt: new Date() },
+        })
+        .returning();
+      return {
+        feedId: row.feedId,
+        rating: row.rating,
+        modifiedAt: row.modifiedAt,
+      };
+    }),
+
+  feedRatings: sessionProcedure.query(async ({ ctx }) => {
+    const rows = await ctx.db
+      .select({
+        feedId: basalFeedRatingsTable.feedId,
+        rating: basalFeedRatingsTable.rating,
+      })
+      .from(basalFeedRatingsTable)
+      .where(eq(basalFeedRatingsTable.userId, ctx.user.id));
+    return rows.map((r) => ({
+      feedId: r.feedId,
+      rating: r.rating as BasalRating,
+    }));
+  }),
+
+  ratingsForBookmarks: sessionProcedure
+    .input(
+      z.object({
+        ids: z.array(z.string()).max(RATINGS_FOR_BOOKMARKS_CAP),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.user.id;
+      const out: Record<
+        string,
+        {
+          rating: BasalRating | null;
+          score: {
+            label: BasalLabel;
+            confidence: number;
+            expectedLevel: number;
+            model: string;
+            calibrationId: string | null;
+            stale: boolean;
+          } | null;
+        }
+      > = {};
+      if (input.ids.length === 0) {
+        return out;
+      }
+      const activeCalibrationId = await getActiveCalibrationId(ctx.db, userId);
+      const ratings = await ctx.db
+        .select({
+          bookmarkId: basalRatingsTable.bookmarkId,
+          rating: basalRatingsTable.rating,
+        })
+        .from(basalRatingsTable)
+        .where(
+          and(
+            eq(basalRatingsTable.userId, userId),
+            inArray(basalRatingsTable.bookmarkId, input.ids),
+          ),
+        );
+      const scores = await ctx.db
+        .select({
+          bookmarkId: basalScoresTable.bookmarkId,
+          label: basalScoresTable.label,
+          confidence: basalScoresTable.confidence,
+          expectedLevel: basalScoresTable.expectedLevel,
+          model: basalScoresTable.model,
+          calibrationId: basalScoresTable.calibrationId,
+        })
+        .from(basalScoresTable)
+        .where(
+          and(
+            eq(basalScoresTable.userId, userId),
+            inArray(basalScoresTable.bookmarkId, input.ids),
+          ),
+        );
+
+      for (const r of ratings) {
+        out[r.bookmarkId] = { rating: r.rating as BasalRating, score: null };
+      }
+      for (const { bookmarkId, ...score } of scores) {
+        const entry = out[bookmarkId] ?? { rating: null, score: null };
+        entry.score = {
+          ...score,
+          label: score.label as BasalLabel,
+          stale: isScoreStale(score.calibrationId, activeCalibrationId),
+        };
+        out[bookmarkId] = entry;
+      }
+      return out;
+    }),
+
   updateSettings: sessionProcedure
     .input(
       z.object({
@@ -264,14 +445,19 @@ export const basalAppRouter = router({
     .output(z.object({ jobId: z.string(), warnings: z.array(z.string()) }))
     .mutation(async ({ ctx }) => {
       const userId = ctx.user.id;
-      const [{ ratings }] = await ctx.db
-        .select({ ratings: count() })
+      const [{ articleRatings }] = await ctx.db
+        .select({ articleRatings: count() })
         .from(basalRatingsTable)
         .where(eq(basalRatingsTable.userId, userId));
+      const [{ feedRatings }] = await ctx.db
+        .select({ feedRatings: count() })
+        .from(basalFeedRatingsTable)
+        .where(eq(basalFeedRatingsTable.userId, userId));
+      const ratings = articleRatings + feedRatings;
       if (ratings < BASAL_MIN_RATINGS) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Za mało ocen: ${ratings}. Trening wymaga co najmniej ${BASAL_MIN_RATINGS} ocenionych zakładek.`,
+          message: `Za mało ocen: ${ratings}. Trening wymaga co najmniej ${BASAL_MIN_RATINGS} ocen (zakładek i feedów).`,
         });
       }
       const warnings: string[] = [];
@@ -305,6 +491,26 @@ export const basalAppRouter = router({
       return { jobId };
     }),
 
+  scoreFeeds: sessionProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).optional(),
+        })
+        .optional(),
+    )
+    .output(z.object({ jobId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.user.id;
+      const [{ feeds }] = await ctx.db
+        .select({ feeds: count() })
+        .from(rssFeedsTable)
+        .where(eq(rssFeedsTable.userId, userId));
+      const limit = clamp(input?.limit ?? feeds, 1, BASAL_MAX_ITEMS_CAP);
+      const jobId = await startBasalScoreFeedsJob(ctx.db, userId, limit);
+      return { jobId };
+    }),
+
   job: sessionProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
@@ -334,6 +540,7 @@ export const basalAppRouter = router({
   feedQuality: sessionProcedure.query(async ({ ctx }) => {
     const userId = ctx.user.id;
     const settings = await getBasalSettings(ctx.db, userId);
+    const activeCalibrationId = await getActiveCalibrationId(ctx.db, userId);
 
     const feeds = await ctx.db
       .select({
@@ -376,6 +583,29 @@ export const basalAppRouter = router({
       levels.set(row.bookmarkId, row.expectedLevel);
     }
 
+    const feedRatingRows = await ctx.db
+      .select({
+        feedId: basalFeedRatingsTable.feedId,
+        rating: basalFeedRatingsTable.rating,
+      })
+      .from(basalFeedRatingsTable)
+      .where(eq(basalFeedRatingsTable.userId, userId));
+    const userRatings = new Map(
+      feedRatingRows.map((r) => [r.feedId, r.rating as BasalRating]),
+    );
+
+    const feedScoreRows = await ctx.db
+      .select({
+        feedId: basalFeedScoresTable.feedId,
+        label: basalFeedScoresTable.label,
+        confidence: basalFeedScoresTable.confidence,
+        expectedLevel: basalFeedScoresTable.expectedLevel,
+        calibrationId: basalFeedScoresTable.calibrationId,
+      })
+      .from(basalFeedScoresTable)
+      .where(eq(basalFeedScoresTable.userId, userId));
+    const feedScores = new Map(feedScoreRows.map((r) => [r.feedId, r]));
+
     return feeds.map((feed) => {
       const levels = [...(perFeed.get(feed.id)?.values() ?? [])];
       const scoredCount = levels.length;
@@ -389,17 +619,46 @@ export const basalAppRouter = router({
               isWeakByThreshold(l, settings.archiveThreshold),
             ).length / scoredCount
           : null;
+      const userRating = userRatings.get(feed.id) ?? null;
+      const feedScore = feedScores.get(feed.id);
+      const basalFeedScore = feedScore
+        ? {
+            label: feedScore.label as BasalLabel,
+            confidence: feedScore.confidence,
+            expectedLevel: feedScore.expectedLevel,
+            stale: isScoreStale(feedScore.calibrationId, activeCalibrationId),
+          }
+        : null;
+
+      // Value behind the disable suggestion, most specific evidence first:
+      //   1. mean of article scores once at least 10 articles are scored,
+      //   2. otherwise the feed-level Basal score,
+      //   3. otherwise the user's own feed rating (0..2).
+      // Display only: nothing here writes to rssFeeds, and a feed rating never
+      // disables a feed by itself.
+      let decisionValue: number | null = null;
+      if (
+        meanExpectedLevel !== null &&
+        scoredCount >= FEED_QUALITY_MIN_SCORED
+      ) {
+        decisionValue = meanExpectedLevel;
+      } else if (basalFeedScore) {
+        decisionValue = basalFeedScore.expectedLevel;
+      } else if (userRating !== null) {
+        decisionValue = userRating;
+      }
+
       return {
         feedId: feed.id,
         name: feed.name,
         enabled: feed.enabled,
         scoredCount,
         meanExpectedLevel,
+        articleMean: meanExpectedLevel,
         weakShare,
-        suggestDisable:
-          meanExpectedLevel !== null &&
-          meanExpectedLevel < 1.0 &&
-          scoredCount >= 10,
+        userRating,
+        basalFeedScore,
+        suggestDisable: decisionValue !== null && decisionValue < 1.0,
       };
     });
   }),

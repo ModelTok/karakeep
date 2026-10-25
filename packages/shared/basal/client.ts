@@ -7,6 +7,7 @@ import type {
   BasalScoreResponse,
   BasalTrainResponse,
 } from "./types";
+import type { BasalQuestion, BasalQuestionName } from "./decision";
 import { expectedLevelFromProbabilities, labelFromAnswer } from "./decision";
 import {
   zBasalHealth,
@@ -127,7 +128,14 @@ export class BasalClient {
     );
   }
 
-  async score(items: BasalScoreItem[]): Promise<BasalScoreResponse> {
+  /**
+   * Without `opts` the bridge falls back to its own usefulness question.
+   * `questionName` selects the answer key used by /v1/systemone.
+   */
+  async score(
+    items: BasalScoreItem[],
+    opts: { question?: BasalQuestion; questionName?: BasalQuestionName } = {},
+  ): Promise<BasalScoreResponse> {
     if (this.isMock()) {
       return {
         mock: true,
@@ -153,7 +161,11 @@ export class BasalClient {
     return this.request(
       "POST",
       "/score",
-      { items },
+      {
+        items,
+        ...(opts.question ? { question: opts.question } : {}),
+        ...(opts.questionName ? { questionName: opts.questionName } : {}),
+      },
       BASAL_SCORE_TIMEOUT_MS,
       zBasalScoreResponse,
     );

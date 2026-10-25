@@ -3,12 +3,16 @@ import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 
 import {
   basalCalibrationsTable,
+  basalFeedRatingsTable,
+  basalFeedScoresTable,
   basalJobsTable,
   basalRatingsTable,
   basalScoresTable,
   basalSettingsTable,
   bookmarks,
   bookmarkTags,
+  rssFeedImportsTable,
+  rssFeedsTable,
   tagsOnBookmarks,
 } from "@karakeep/db/schema";
 import {
@@ -16,12 +20,24 @@ import {
   BasalUnavailableError,
 } from "@karakeep/shared/basal/client";
 import { buildDataset, groupFor } from "@karakeep/shared/basal/dataset";
-import type { BasalDatasetEntry } from "@karakeep/shared/basal/dataset";
-import { shouldAutoArchive } from "@karakeep/shared/basal/decision";
+import type {
+  BasalDatasetEntry,
+  BasalFeedDatasetEntry,
+} from "@karakeep/shared/basal/dataset";
+import {
+  FEED_VALUE_QUESTION,
+  shouldAutoArchive,
+} from "@karakeep/shared/basal/decision";
 import type { BasalState } from "@karakeep/shared/basal/state";
-import { buildBasalState, domainFromUrl } from "@karakeep/shared/basal/state";
+import {
+  BASAL_FEED_HEADLINE_COUNT,
+  BASAL_FEED_STATE_KIND,
+  buildBasalFeedState,
+  buildBasalState,
+  domainFromUrl,
+} from "@karakeep/shared/basal/state";
 import type { BasalRating } from "@karakeep/shared/basal/types";
-import { toStoredScore } from "@karakeep/shared/basal/types";
+import { toFeedScoreResult, toStoredScore } from "@karakeep/shared/basal/types";
 import serverConfig from "@karakeep/shared/config";
 import logger from "@karakeep/shared/logger";
 import { htmlToPlainText } from "@karakeep/shared/utils/htmlUtils";
@@ -37,6 +53,9 @@ export const BASAL_MIN_RATINGS = 20;
 export const BASAL_RECOMMENDED_RATINGS = 50;
 export const BASAL_WEAK_TAG = "basal:slabe";
 export const BASAL_CALIBRATION_TARGETS = ["0.01", "0.05"];
+// A rated feed gets its own standalone training line only while it has fewer
+// rated articles than this; otherwise the articles already carry feed_value.
+export const BASAL_STANDALONE_FEED_MAX_ARTICLES = 3;
 
 const MAX_RECORDED_ERRORS = 20;
 // Title-only candidates are skipped, so look a bit further back than `limit`
@@ -133,6 +152,8 @@ export async function reconcileStaleBasalJobs(db: DB, userId: string) {
     .where(and(...conditions));
 }
 
+type BasalJobType = (typeof basalJobsTable.$inferInsert)["type"];
+
 interface JobContext {
   db: DB;
   userId: string;
@@ -146,7 +167,7 @@ interface JobContext {
 async function startBasalJob(
   db: DB,
   userId: string,
-  type: "score" | "train",
+  type: BasalJobType,
   run: (ctx: JobContext) => Promise<void>,
 ): Promise<string> {
   if (activeJob) {
@@ -183,7 +204,7 @@ async function executeJob(
   db: DB,
   userId: string,
   jobId: string,
-  type: "score" | "train",
+  type: BasalJobType,
   run: (ctx: JobContext) => Promise<void>,
 ) {
   const result: Record<string, unknown> = {};
@@ -310,6 +331,82 @@ async function loadBasalStates(
       text,
     });
     out.set(row.id, { ...state, feedId: feed?.id ?? null, domain });
+  }
+  return out;
+}
+
+export interface LoadedFeedState {
+  name: string;
+  url: string;
+  state: string;
+}
+
+/**
+ * Feed summaries for the given feeds of the user. rssFeeds has no description
+ * column, so the summary is built from name, url and recent headlines only.
+ */
+export async function loadFeedStates(
+  db: DB,
+  userId: string,
+  feedIds: string[],
+): Promise<Map<string, LoadedFeedState>> {
+  const out = new Map<string, LoadedFeedState>();
+  if (feedIds.length === 0) {
+    return out;
+  }
+  const feeds = await db
+    .select({
+      id: rssFeedsTable.id,
+      name: rssFeedsTable.name,
+      url: rssFeedsTable.url,
+    })
+    .from(rssFeedsTable)
+    .where(
+      and(eq(rssFeedsTable.userId, userId), inArray(rssFeedsTable.id, feedIds)),
+    );
+
+  const headlineRows = await db
+    .select({
+      feedId: rssFeedImportsTable.rssFeedId,
+      bookmarkId: bookmarks.id,
+      title: bookmarks.title,
+    })
+    .from(rssFeedImportsTable)
+    .innerJoin(bookmarks, eq(bookmarks.id, rssFeedImportsTable.bookmarkId))
+    .where(
+      and(
+        inArray(rssFeedImportsTable.rssFeedId, feedIds),
+        eq(bookmarks.userId, userId),
+      ),
+    )
+    .orderBy(desc(bookmarks.createdAt), desc(bookmarks.id));
+
+  const headlines = new Map<string, { seen: Set<string>; titles: string[] }>();
+  for (const row of headlineRows) {
+    let entry = headlines.get(row.feedId);
+    if (!entry) {
+      entry = { seen: new Set(), titles: [] };
+      headlines.set(row.feedId, entry);
+    }
+    const title = row.title?.trim();
+    if (
+      !title ||
+      entry.seen.has(row.bookmarkId) ||
+      entry.titles.length >= BASAL_FEED_HEADLINE_COUNT
+    ) {
+      continue;
+    }
+    entry.seen.add(row.bookmarkId);
+    entry.titles.push(title);
+  }
+
+  for (const feed of feeds) {
+    const { state } = buildBasalFeedState({
+      name: feed.name,
+      url: feed.url,
+      headlines: headlines.get(feed.id)?.titles ?? [],
+    });
+    out.set(feed.id, { name: feed.name, url: feed.url, state });
   }
   return out;
 }
@@ -488,6 +585,94 @@ async function runScoreJob(ctx: JobContext, limit: number) {
 }
 
 // ---------------------------------------------------------------------------
+// Feed score job
+
+export function startBasalScoreFeedsJob(db: DB, userId: string, limit: number) {
+  return startBasalJob(db, userId, "score_feeds", (ctx) =>
+    runScoreFeedsJob(ctx, limit),
+  );
+}
+
+// Scores feeds with the feed_value question. Writes basalFeedScores only:
+// never archives, disables or deletes anything.
+async function runScoreFeedsJob(ctx: JobContext, limit: number) {
+  const { db, userId, client, result } = ctx;
+  const errors: string[] = [];
+  Object.assign(result, { feedsScored: 0, failedBatches: 0, errors });
+  const counters = result as { feedsScored: number; failedBatches: number };
+  const recordError = (message: string) => {
+    if (errors.length < MAX_RECORDED_ERRORS) {
+      errors.push(message);
+    }
+  };
+
+  const feeds = await db
+    .select({ id: rssFeedsTable.id })
+    .from(rssFeedsTable)
+    .where(eq(rssFeedsTable.userId, userId))
+    .orderBy(rssFeedsTable.name, rssFeedsTable.id)
+    .limit(limit);
+  const feedIds = feeds.map((f) => f.id);
+  const states = await loadFeedStates(db, userId, feedIds);
+  const items = feedIds.flatMap((id) => {
+    const state = states.get(id);
+    return state ? [{ id, state: state.state }] : [];
+  });
+  await ctx.setTotal(items.length);
+
+  const question = {
+    ...FEED_VALUE_QUESTION,
+    criteria: [...FEED_VALUE_QUESTION.criteria],
+  };
+  let processed = 0;
+  for (let i = 0; i < items.length; i += BASAL_SCORE_BATCH_SIZE) {
+    const batch = items.slice(i, i + BASAL_SCORE_BATCH_SIZE);
+    const batchIds = new Set(batch.map((b) => b.id));
+    try {
+      const response = await client.score(batch, {
+        question,
+        questionName: "feed_value",
+      });
+      if (response.mock) {
+        result.mock = true;
+      }
+      for (const r of response.results) {
+        if (!batchIds.has(r.id)) {
+          continue;
+        }
+        batchIds.delete(r.id);
+        const feedResult = toFeedScoreResult(r, r.id);
+        const stored = {
+          ...toStoredScore(r),
+          stateKind: BASAL_FEED_STATE_KIND,
+        };
+        await db
+          .insert(basalFeedScoresTable)
+          .values({ userId, feedId: feedResult.feedId, ...stored })
+          .onConflictDoUpdate({
+            target: [basalFeedScoresTable.userId, basalFeedScoresTable.feedId],
+            set: { ...stored, modifiedAt: new Date() },
+          });
+        counters.feedsScored++;
+      }
+      if (batchIds.size > 0) {
+        recordError(
+          `Bridge returned no result for ${batchIds.size} feed(s): ${[...batchIds].join(", ")}`,
+        );
+      }
+    } catch (e) {
+      if (e instanceof BasalUnavailableError) {
+        throw e;
+      }
+      counters.failedBatches++;
+      recordError(e instanceof Error ? e.message : String(e));
+    }
+    processed += batch.length;
+    await ctx.setProcessed(processed);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Train job
 
 export function startBasalTrainJob(db: DB, userId: string, warnings: string[]) {
@@ -500,16 +685,51 @@ async function runTrainJob(ctx: JobContext, warnings: string[]) {
   const { db, userId, client, result } = ctx;
   result.warnings = warnings;
 
-  const ratings = await db
+  const feedRatingRows = await db
+    .select({
+      feedId: basalFeedRatingsTable.feedId,
+      rating: basalFeedRatingsTable.rating,
+    })
+    .from(basalFeedRatingsTable)
+    .where(eq(basalFeedRatingsTable.userId, userId));
+  const feedRatings = new Map<string, BasalRating>(
+    feedRatingRows.map((r) => [r.feedId, r.rating as BasalRating]),
+  );
+
+  // One row per (rating, feed import); a bookmark imported by several feeds
+  // counts towards each of them.
+  const ratingRows = await db
     .select({
       bookmarkId: basalRatingsTable.bookmarkId,
       rating: basalRatingsTable.rating,
+      feedId: rssFeedImportsTable.rssFeedId,
     })
     .from(basalRatingsTable)
     .innerJoin(bookmarks, eq(bookmarks.id, basalRatingsTable.bookmarkId))
+    .leftJoin(
+      rssFeedImportsTable,
+      eq(rssFeedImportsTable.bookmarkId, basalRatingsTable.bookmarkId),
+    )
     .where(
       and(eq(basalRatingsTable.userId, userId), eq(bookmarks.userId, userId)),
     );
+  const ratingByBookmark = new Map<string, number>();
+  const ratedArticlesPerFeed = new Map<string, Set<string>>();
+  for (const row of ratingRows) {
+    ratingByBookmark.set(row.bookmarkId, row.rating);
+    if (row.feedId) {
+      let ids = ratedArticlesPerFeed.get(row.feedId);
+      if (!ids) {
+        ids = new Set();
+        ratedArticlesPerFeed.set(row.feedId, ids);
+      }
+      ids.add(row.bookmarkId);
+    }
+  }
+  const ratings = [...ratingByBookmark].map(([bookmarkId, rating]) => ({
+    bookmarkId,
+    rating,
+  }));
 
   const entries: BasalDatasetEntry[] = [];
   for (let i = 0; i < ratings.length; i += STATE_LOAD_CHUNK) {
@@ -530,18 +750,48 @@ async function runTrainJob(ctx: JobContext, warnings: string[]) {
         state: state.state,
         stateKind: state.stateKind,
         rating: r.rating as BasalRating,
+        feedRating: state.feedId
+          ? (feedRatings.get(state.feedId) ?? null)
+          : null,
       });
     }
   }
 
-  const { lines, skipped } = buildDataset(entries);
-  result.labelled = lines.length;
-  result.skipped = skipped;
+  const standaloneFeedIds = [...feedRatings.keys()].filter(
+    (feedId) =>
+      (ratedArticlesPerFeed.get(feedId)?.size ?? 0) <
+      BASAL_STANDALONE_FEED_MAX_ARTICLES,
+  );
+  const feedStates = await loadFeedStates(db, userId, standaloneFeedIds);
+  const feedEntries: BasalFeedDatasetEntry[] = [];
+  for (const feedId of standaloneFeedIds) {
+    const feedState = feedStates.get(feedId);
+    const rating = feedRatings.get(feedId);
+    if (!feedState || rating === undefined) {
+      continue;
+    }
+    feedEntries.push({
+      id: `feed:${feedId}`,
+      group: groupFor({ feedId, domain: "" }),
+      state: feedState.state,
+      rating,
+    });
+  }
+
+  const { lines, skipped, articles, feedQuestions, standaloneFeeds } =
+    buildDataset(entries, feedEntries);
+  Object.assign(result, {
+    labelled: lines.length,
+    skipped,
+    articles,
+    feedQuestions,
+    standaloneFeeds,
+  });
   await ctx.setTotal(lines.length);
 
   if (lines.length < BASAL_MIN_RATINGS) {
     throw new Error(
-      `Za mało ocenionych zakładek z treścią: ${lines.length} (pominięto ${skipped} bez treści). Trening wymaga co najmniej ${BASAL_MIN_RATINGS}.`,
+      `Za mało ocen do treningu: ${lines.length} (zakładki z treścią: ${articles}, samodzielne feedy: ${standaloneFeeds}; pominięto ${skipped} zakładek bez treści). Trening wymaga co najmniej ${BASAL_MIN_RATINGS}.`,
     );
   }
   if (lines.length < BASAL_RECOMMENDED_RATINGS) {
