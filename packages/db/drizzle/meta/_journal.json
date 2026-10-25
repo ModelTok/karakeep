@@ -659,6 +659,13 @@
       "when": 1785586065846,
       "tag": "0093_reader_view_assessment",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "6",
+      "when": 1792962403564,
+      "tag": "0094_basal_ratings_scoring",
+      "breakpoints": true
     }
   ]
 }

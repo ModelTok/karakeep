@@ -1056,6 +1056,181 @@ export const importStagingBookmarks = sqliteTable(
   ],
 );
 
+export const basalRatingsTable = sqliteTable(
+  "basalRatings",
+  {
+    id: text("id")
+      .notNull()
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    bookmarkId: text("bookmarkId")
+      .notNull()
+      .references(() => bookmarks.id, { onDelete: "cascade" }),
+    rating: integer("rating").notNull(),
+    createdAt: createdAtField(),
+    modifiedAt: modifiedAtField(),
+  },
+  (br) => [
+    unique().on(br.userId, br.bookmarkId),
+    index("basalRatings_userId_idx").on(br.userId),
+    index("basalRatings_bookmarkId_idx").on(br.bookmarkId),
+  ],
+);
+
+export const basalScoresTable = sqliteTable(
+  "basalScores",
+  {
+    id: text("id")
+      .notNull()
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    bookmarkId: text("bookmarkId")
+      .notNull()
+      .references(() => bookmarks.id, { onDelete: "cascade" }),
+    expectedLevel: real("expectedLevel").notNull(),
+    label: text("label").notNull(),
+    probabilities: text("probabilities", { mode: "json" })
+      .notNull()
+      .$type<Record<string, number>>(),
+    confidence: real("confidence").notNull(),
+    model: text("model").notNull(),
+    calibrationId: text("calibrationId"),
+    createdAt: createdAtField(),
+    modifiedAt: modifiedAtField(),
+  },
+  (bs) => [
+    unique().on(bs.userId, bs.bookmarkId),
+    index("basalScores_userId_idx").on(bs.userId),
+    index("basalScores_bookmarkId_idx").on(bs.bookmarkId),
+    index("basalScores_calibrationId_idx").on(bs.calibrationId),
+  ],
+);
+
+export const basalCalibrationsTable = sqliteTable(
+  "basalCalibrations",
+  {
+    // sha256 of the calibration file
+    id: text("id").notNull().primaryKey(),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    model: text("model").notNull(),
+    mode: text("mode").notNull(),
+    targets: text("targets", { mode: "json" }).notNull().$type<string[]>(),
+    metrics: text("metrics", { mode: "json" })
+      .notNull()
+      .$type<Record<string, unknown>>(),
+    path: text("path").notNull(),
+    active: integer("active", { mode: "boolean" }).notNull().default(false),
+    createdAt: createdAtField(),
+  },
+  (bc) => [index("basalCalibrations_userId_idx").on(bc.userId)],
+);
+
+export const basalJobsTable = sqliteTable(
+  "basalJobs",
+  {
+    id: text("id")
+      .notNull()
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: text("type", { enum: ["score", "train"] }).notNull(),
+    status: text("status", {
+      enum: ["queued", "running", "success", "failure"],
+    }).notNull(),
+    total: integer("total").notNull().default(0),
+    processed: integer("processed").notNull().default(0),
+    result: text("result", { mode: "json" }).$type<Record<string, unknown>>(),
+    error: text("error"),
+    createdAt: createdAtField(),
+    finishedAt: integer("finishedAt", { mode: "timestamp" }),
+  },
+  (bj) => [
+    index("basalJobs_userId_idx").on(bj.userId),
+    index("basalJobs_userId_status_idx").on(bj.userId, bj.status),
+  ],
+);
+
+export const basalSettingsTable = sqliteTable("basalSettings", {
+  userId: text("userId")
+    .notNull()
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  autoArchive: integer("autoArchive", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  archiveThreshold: real("archiveThreshold").notNull().default(0.34),
+  minConfidence: real("minConfidence").notNull().default(0.9),
+  maxItems: integer("maxItems").notNull().default(50),
+  modifiedAt: modifiedAtField(),
+});
+
+export const basalFeedRatingsTable = sqliteTable(
+  "basalFeedRatings",
+  {
+    id: text("id")
+      .notNull()
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    feedId: text("feedId")
+      .notNull()
+      .references(() => rssFeedsTable.id, { onDelete: "cascade" }),
+    rating: integer("rating").notNull(),
+    createdAt: createdAtField(),
+    modifiedAt: modifiedAtField(),
+  },
+  (bfr) => [
+    unique().on(bfr.userId, bfr.feedId),
+    index("basalFeedRatings_userId_idx").on(bfr.userId),
+    index("basalFeedRatings_feedId_idx").on(bfr.feedId),
+  ],
+);
+
+export const basalFeedScoresTable = sqliteTable(
+  "basalFeedScores",
+  {
+    id: text("id")
+      .notNull()
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    userId: text("userId")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    feedId: text("feedId")
+      .notNull()
+      .references(() => rssFeedsTable.id, { onDelete: "cascade" }),
+    expectedLevel: real("expectedLevel").notNull(),
+    label: text("label").notNull(),
+    probabilities: text("probabilities", { mode: "json" })
+      .notNull()
+      .$type<Record<string, number>>(),
+    confidence: real("confidence").notNull(),
+    model: text("model").notNull(),
+    calibrationId: text("calibrationId"),
+    stateKind: text("stateKind").notNull().default("feed_summary"),
+    createdAt: createdAtField(),
+    modifiedAt: modifiedAtField(),
+  },
+  (bfs) => [
+    unique().on(bfs.userId, bfs.feedId),
+    index("basalFeedScores_userId_idx").on(bfs.userId),
+    index("basalFeedScores_feedId_idx").on(bfs.feedId),
+    index("basalFeedScores_calibrationId_idx").on(bfs.calibrationId),
+  ],
+);
+
 // Relations
 
 export const userRelations = relations(users, ({ many, one }) => ({
