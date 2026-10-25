@@ -1,0 +1,25 @@
+[Unit]
+Description=basal-bridge - the only HTTP surface Karakeep may use for basal decisions
+Documentation=file://%h/basal-bridge/README.md
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/basal-env/bin/python %h/basal-bridge/bridge.py
+WorkingDirectory=%h/basal-bridge
+Environment=BASAL_MODEL=%h/models/basal-2.0-mini-GGUF
+Environment=BASAL_MODE=gguf
+Environment=BASAL_GGUF=%h/models/basal-2.0-mini-GGUF/basal-2.0-mini-Q8_0.gguf
+Environment=BASAL_SHIPPED_CALIBRATION=%h/models/basal-2.0-mini-GGUF/CALIBRATION.llamacpp.json
+Environment=BASAL_BRIDGE_DIR=%h/basal-bridge
+Environment=BASAL_SERVE_PORT=8011
+Environment=BASAL_BRIDGE_PORT=8010
+Environment=BASAL_TARGETS=0.01,0.05
+Environment=BASAL_MIN_PER_TYPE=50
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

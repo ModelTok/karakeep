@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@karakeep/basal-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Host-side HTTP bridge between Karakeep and a local basal decision engine (Python, not part of the pnpm build)",
+  "scripts": {}
+}
