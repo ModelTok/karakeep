@@ -89,12 +89,19 @@ export const zBasalScoreResponse = z.object({
 export type BasalScoreResponse = z.infer<typeof zBasalScoreResponse>;
 
 // POST /train
+// The bridge reports `automated_share` as per-target coverage map when
+// basal-calibrate prints it, and as a plain number in mock mode. Keep both
+// shapes valid so a real calibration report is never rejected.
 export const zBasalTrainReport = z.object({
   accuracy: z.number().nullable(),
   ece: z.number().nullable(),
   decisions: z.number(),
-  automated_share: z.number().nullable(),
+  automated_share: z
+    .union([z.number(), z.record(z.string(), z.unknown())])
+    .nullable(),
   thresholds: z.record(z.string(), z.unknown()),
+  fit: z.unknown().optional(),
+  cert: z.unknown().optional(),
   raw: z.string().optional(),
 });
 export type BasalTrainReport = z.infer<typeof zBasalTrainReport>;

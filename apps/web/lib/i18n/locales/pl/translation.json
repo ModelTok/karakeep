@@ -101,6 +101,34 @@
     "download": "Pobierz",
     "rename": "Zmień nazwę"
   },
+  "basal": {
+    "rating": {
+      "label": "Ocena",
+      "slaby": "Słaby",
+      "sredni": "Średni",
+      "ciekawy": "Ciekawy",
+      "clear_hint": "Kliknij ponownie, aby wyczyścić ocenę",
+      "saved": "Ocena zapisana",
+      "error": "Nie udało się zapisać oceny"
+    },
+    "score": {
+      "stale": "nieaktualna kalibracja",
+      "model": "Model",
+      "calibration": "Kalibracja",
+      "expected_level": "Oczekiwany poziom",
+      "mock": "mock",
+      "tooltip_title": "Ocena basal"
+    },
+    "feed": {
+      "your_rating": "Twoja ocena",
+      "basal_score": "Ocena basal",
+      "article_mean": "Średnia z artykułów",
+      "quality": "Jakość",
+      "suggest_disable": "Sugestia: wyłącz feed",
+      "no_data": "brak danych",
+      "scoring_stale": "nieaktualna kalibracja"
+    }
+  },
   "settings": {
     "info": {
       "confirm_new_password": "Potwierdź nowe hasło",
@@ -610,6 +638,59 @@
         "backup_queued": "Zadanie utworzenia kopii zapasowej zostało dodane do kolejki! Przetwarzanie rozpocznie się wkrótce.",
         "backup_deleted": "Kopia zapasowa została usunięta!"
       }
+    },
+    "basal": {
+      "title": "Basal",
+      "description": "Oceny, kalibracja i scoring lokalnego modelu decyzyjnego.",
+      "nav_label": "Basal",
+      "status_title": "Silnik",
+      "bridge": "Bridge",
+      "model": "Model",
+      "mode": "Tryb",
+      "engine_version": "Wersja silnika",
+      "active_calibration": "Aktywna kalibracja",
+      "no_calibration": "brak kalibracji",
+      "unavailable": "Basal niedostępny",
+      "unavailable_hint": "Brak połączenia z {{url}}. Sprawdź, czy basal-bridge działa na hoście.",
+      "mock_badge": "Tryb mock — wyniki są atrapą, nie pochodzą z modelu.",
+      "ratings_title": "Oceny",
+      "ratings_total": "{{count}} ocen",
+      "ratings_articles": "{{count}} ocen zakładek",
+      "ratings_feeds": "{{count}} ocen feedów",
+      "milestone_50": "50 ocen — minimalne dopasowanie temperatury",
+      "milestone_85": "85 ocen — pierwszy certyfikowany próg 5%",
+      "milestone_430": "430 ocen — certyfikowany próg 1%",
+      "milestone_reached": "osiągnięte",
+      "milestone_missing": "brakuje {{count}}",
+      "milestone_hint": "Progi nie są gwarantowane przy 50 ocenach: kalibracja dzieli dane na część dopasowującą i certyfikującą.",
+      "actions_title": "Akcje",
+      "train": "Wytrenuj model",
+      "train_hint": "Trening dopasowuje progi pewności i temperatury do Twoich ocen; wagi modelu się nie zmieniają.",
+      "score_incoming": "Oceń przychodzące",
+      "score_feeds": "Oceń feedy",
+      "job_running": "Zadanie w toku: {{processed}}/{{total}}",
+      "job_type_score": "Ocenianie zakładek",
+      "job_type_score_feeds": "Ocenianie feedów",
+      "job_type_train": "Kalibracja",
+      "job_failed": "Zadanie nie powiodło się: {{error}}",
+      "job_success": "Zadanie zakończone",
+      "last_report": "Raport z ostatniej kalibracji",
+      "accuracy": "Dokładność",
+      "ece": "ECE",
+      "thresholds": "Progi",
+      "automated_share": "Udział automatyczny",
+      "decisions": "Decyzje",
+      "settings_title": "Ustawienia scoringu",
+      "auto_archive": "Auto-archiwizacja słabych",
+      "auto_archive_hint": "Archiwizuje tylko przy etykiecie Słaby i pewności powyżej progu. Nigdy nie usuwa.",
+      "archive_threshold": "Próg archiwizacji (oczekiwany poziom)",
+      "min_confidence": "Minimalna pewność",
+      "max_items": "Limit pozycji na jedno ocenianie",
+      "save": "Zapisz",
+      "saved": "Ustawienia zapisane",
+      "not_enough_ratings": "Potrzeba co najmniej 20 ocen (zakładek i feedów), żeby uruchomić kalibrację.",
+      "feeds_title": "Jakość feedów",
+      "feeds_empty": "Brak feedów."
     }
   },
   "admin": {

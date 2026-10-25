@@ -7,12 +7,15 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useBasalRateMutation } from "@/lib/basal/bookmarkState";
 import { useTranslation } from "@/lib/i18n/client";
 import { ListChecks, Pencil, Trash2 } from "lucide-react";
+import { useHotkeys } from "react-hotkeys-hook";
 
 import type { ZBookmark } from "@karakeep/shared/types/bookmarks";
 import { useUpdateBookmark } from "@karakeep/shared-react/hooks/bookmarks";
 
+import BasalBookmarkControls from "../bookmarks/BasalBookmarkControls";
 import { EditBookmarkDialog } from "../bookmarks/EditBookmarkDialog";
 import { useManageListsModal } from "../bookmarks/ManageListsModal";
 import { ArchivedActionIcon, FavouritedActionIcon } from "../bookmarks/icons";
@@ -56,8 +59,40 @@ export default function ActionBar({
       onError,
     });
 
+  const { mutate: rateBookmark } = useBasalRateMutation({
+    onSuccess: () => {
+      toast({ description: t("basal.rating.saved") });
+    },
+  });
+  // Digits 1/2/3 rate the previewed bookmark. Verified free in
+  // useBookmarkKeyboardNavigation (it binds no digits). Ignored in form fields.
+  const ratingHotkeyOptions = {
+    preventDefault: true,
+    enableOnFormTags: false,
+    enableOnContentEditable: false,
+  } as const;
+  useHotkeys(
+    "1",
+    () => rateBookmark({ bookmarkId: bookmark.id, rating: 0 }),
+    ratingHotkeyOptions,
+    [bookmark.id],
+  );
+  useHotkeys(
+    "2",
+    () => rateBookmark({ bookmarkId: bookmark.id, rating: 1 }),
+    ratingHotkeyOptions,
+    [bookmark.id],
+  );
+  useHotkeys(
+    "3",
+    () => rateBookmark({ bookmarkId: bookmark.id, rating: 2 }),
+    ratingHotkeyOptions,
+    [bookmark.id],
+  );
+
   return (
-    <div className="flex items-center justify-center gap-3 text-muted-foreground">
+    <div className="flex flex-wrap items-center justify-center gap-3 text-muted-foreground">
+      <BasalBookmarkControls bookmarkId={bookmark.id} showLabel />
       <Tooltip delayDuration={0}>
         <EditBookmarkDialog
           bookmark={bookmark}

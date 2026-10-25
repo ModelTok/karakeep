@@ -62,7 +62,91 @@ import {
   TableRow,
 } from "../ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import BasalFeedRatingButtons from "./BasalFeedRatingButtons";
 import { SettingsPage, SettingsSection } from "./SettingsPage";
+
+// Mirrors one row of the basal.feedQuality query result.
+export interface BasalFeedQuality {
+  feedId: string;
+  name: string;
+  enabled: boolean;
+  scoredCount: number;
+  meanExpectedLevel: number | null;
+  articleMean: number | null;
+  weakShare: number | null;
+  userRating: 0 | 1 | 2 | null;
+  basalFeedScore: {
+    label: string;
+    confidence: number;
+    expectedLevel: number;
+    stale: boolean;
+  } | null;
+  suggestDisable: boolean;
+}
+
+const BASAL_LABEL_KEYS = {
+  slaby: "basal.rating.slaby",
+  sredni: "basal.rating.sredni",
+  ciekawy: "basal.rating.ciekawy",
+} as const;
+
+function isBasalLabel(label: string): label is keyof typeof BASAL_LABEL_KEYS {
+  return Object.hasOwn(BASAL_LABEL_KEYS, label);
+}
+
+export function BasalFeedScoreCell({
+  quality,
+}: {
+  quality: BasalFeedQuality | undefined;
+}) {
+  const { t } = useTranslation();
+  const score = quality?.basalFeedScore;
+  if (!score) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  return (
+    <div
+      className={cn(
+        "flex flex-col text-sm",
+        score.stale && "text-muted-foreground",
+      )}
+    >
+      <span>
+        {isBasalLabel(score.label)
+          ? t(BASAL_LABEL_KEYS[score.label])
+          : score.label}{" "}
+        <span className="text-xs text-muted-foreground">
+          {score.confidence.toFixed(2)}
+        </span>
+      </span>
+      {score.stale && (
+        <span className="text-xs">{t("basal.feed.scoring_stale")}</span>
+      )}
+    </div>
+  );
+}
+
+export function BasalFeedArticleMeanCell({
+  quality,
+}: {
+  quality: BasalFeedQuality | undefined;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col text-sm">
+      <span>
+        {quality?.meanExpectedLevel != null
+          ? quality.meanExpectedLevel.toFixed(2)
+          : "—"}
+      </span>
+      {quality?.suggestDisable && (
+        <span className="text-xs text-muted-foreground">
+          {t("basal.feed.suggest_disable")}
+        </span>
+      )}
+    </div>
+  );
+}
 
 export function FeedsEditorDialog() {
   const api = useTRPC();
@@ -346,7 +430,13 @@ export function EditFeedDialog({ feed }: { feed: ZFeed }) {
   );
 }
 
-export function FeedRow({ feed }: { feed: ZFeed }) {
+export function FeedRow({
+  feed,
+  basalQuality,
+}: {
+  feed: ZFeed;
+  basalQuality?: BasalFeedQuality;
+}) {
   const api = useTRPC();
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -445,6 +535,18 @@ export function FeedRow({ feed }: { feed: ZFeed }) {
           </span>
         )}
       </TableCell>
+      <TableCell>
+        <BasalFeedRatingButtons
+          feedId={feed.id}
+          rating={basalQuality?.userRating ?? null}
+        />
+      </TableCell>
+      <TableCell>
+        <BasalFeedScoreCell quality={basalQuality} />
+      </TableCell>
+      <TableCell>
+        <BasalFeedArticleMeanCell quality={basalQuality} />
+      </TableCell>
       <TableCell className="flex items-center gap-2">
         <Switch checked={feed.enabled} onCheckedChange={handleToggle} />
         <EditFeedDialog feed={feed} />
@@ -492,6 +594,14 @@ export default function FeedSettings() {
   const api = useTRPC();
   const { t } = useTranslation();
   const { data: feeds, isLoading } = useQuery(api.feeds.list.queryOptions());
+  const { data: basalQuality } = useQuery(api.basal.feedQuality.queryOptions());
+  const basalQualityByFeed = React.useMemo(
+    () =>
+      new Map<string, BasalFeedQuality>(
+        (basalQuality ?? []).map((row) => [row.feedId, row]),
+      ),
+    [basalQuality],
+  );
   return (
     <SettingsPage
       title={t("settings.feeds.rss_subscriptions")}
@@ -512,12 +622,19 @@ export default function FeedSettings() {
                 <TableHead>{t("common.url")}</TableHead>
                 <TableHead>Last Fetch</TableHead>
                 <TableHead>Last Status</TableHead>
+                <TableHead>{t("basal.feed.your_rating")}</TableHead>
+                <TableHead>{t("basal.feed.basal_score")}</TableHead>
+                <TableHead>{t("basal.feed.article_mean")}</TableHead>
                 <TableHead>{t("common.actions")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {feeds.feeds.map((feed) => (
-                <FeedRow key={feed.id} feed={feed} />
+                <FeedRow
+                  key={feed.id}
+                  feed={feed}
+                  basalQuality={basalQualityByFeed.get(feed.id)}
+                />
               ))}
             </TableBody>
           </Table>

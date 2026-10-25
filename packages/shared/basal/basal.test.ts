@@ -160,6 +160,41 @@ describe("BasalClient errors", () => {
       questionName: "feed_value",
     });
   });
+
+  // Regression: the real bridge reports automated_share as a per-target map,
+  // not a number. Rejecting it would fail every real calibration job.
+  test("train accepts the real bridge report shape", async () => {
+    const bridgeReport = {
+      accuracy: 0.917,
+      ece: 0.536,
+      decisions: 12,
+      fit: { decisions: 8 },
+      cert: { decisions: 4 },
+      automated_share: {
+        "0.05": { coverage: "0%", error: "0%" },
+      },
+      thresholds: {},
+      raw: "score ...",
+    };
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        Response.json({
+          calibration_id: "abc123",
+          path: "/tmp/abc123.json",
+          report: bridgeReport,
+        }),
+      ),
+    );
+    const client = new BasalClient({
+      baseUrl: "http://bridge.test",
+      mock: false,
+      fetchImpl,
+    });
+    const res = await client.train([JSON.stringify({ id: "a" })]);
+    expect(res.calibration_id).toBe("abc123");
+    expect(res.report.decisions).toBe(12);
+    expect(res.report.automated_share).toEqual(bridgeReport.automated_share);
+  });
 });
 
 describe("BasalClient mock", () => {

@@ -11,6 +11,7 @@ import { TFunction } from "i18next";
 import {
   ArrowLeft,
   BarChart3,
+  Brain,
   CloudDownload,
   CreditCard,
   Download,
@@ -72,6 +73,11 @@ const settingsSidebarItems = (
       name: t("settings.feeds.rss_subscriptions"),
       icon: <Rss size={18} />,
       path: "/settings/feeds",
+    },
+    {
+      name: t("settings.basal.nav_label"),
+      icon: <Brain size={18} />,
+      path: "/settings/basal",
     },
     {
       name: t("settings.backups.backups"),

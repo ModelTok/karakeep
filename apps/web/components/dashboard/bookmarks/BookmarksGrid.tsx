@@ -3,6 +3,7 @@ import KeyboardShortcutsDialog from "@/components/dashboard/KeyboardShortcutsDia
 import NoBookmarksBanner from "@/components/dashboard/bookmarks/NoBookmarksBanner";
 import { ActionButton } from "@/components/ui/action-button";
 import ActionConfirmingDialog from "@/components/ui/action-confirming-dialog";
+import { BasalBookmarkStateProvider } from "@/lib/basal/bookmarkState";
 import useBulkActionsStore from "@/lib/bulkActions";
 import { useBookmarkKeyboardNavigation } from "@/lib/hooks/useBookmarkKeyboardNavigation";
 import { useTranslation } from "@/lib/i18n/client";
@@ -173,6 +174,8 @@ export default function BookmarksGrid({
     [gridColumns],
   );
   const { ref: loadMoreRef, inView: loadMoreButtonInView } = useInView();
+  // One ratingsForBookmarks request for the whole grid, not one per card.
+  const bookmarkIds = useMemo(() => bookmarks.map((b) => b.id), [bookmarks]);
 
   // For list/compact layouts, navigation is single-column
   const isListLayout = layout === "list" || layout === "compact";
@@ -241,7 +244,7 @@ export default function BookmarksGrid({
     )),
   ];
   return (
-    <>
+    <BasalBookmarkStateProvider ids={bookmarkIds}>
       {bookmarkLayoutSwitch(layout, {
         masonry: (
           <Masonry
@@ -305,6 +308,6 @@ export default function BookmarksGrid({
           </ActionButton>
         )}
       />
-    </>
+    </BasalBookmarkStateProvider>
   );
 }

@@ -38,6 +38,7 @@ import {
 } from "@karakeep/shared/utils/bookmarkUtils";
 import { switchCase } from "@karakeep/shared/utils/switch";
 
+import BasalBookmarkControls from "./BasalBookmarkControls";
 import BookmarkActionBar from "./BookmarkActionBar";
 import BookmarkFormattedCreatedAt from "./BookmarkFormattedCreatedAt";
 import BookmarkOwnerIcon from "./BookmarkOwnerIcon";
@@ -60,9 +61,11 @@ interface Props {
 function BottomRow({
   footer,
   bookmark,
+  showBasal,
 }: {
   footer?: ReactNode;
   bookmark: ZBookmark;
+  showBasal?: boolean;
 }) {
   return (
     <div className="justify flex w-full shrink-0 justify-between text-gray-500">
@@ -75,7 +78,7 @@ function BottomRow({
           <BookmarkFormattedCreatedAt createdAt={bookmark.createdAt} />
         </Link>
       </div>
-      <BookmarkActionBar bookmark={bookmark} />
+      <BookmarkActionBar bookmark={bookmark} showBasal={showBasal} />
     </div>
   );
 }
@@ -443,7 +446,8 @@ function GridView({
             </div>
           )}
         </div>
-        <BottomRow footer={footer} bookmark={bookmark} />
+        <BasalBookmarkControls bookmarkId={bookmark.id} className="shrink-0" />
+        <BottomRow footer={footer} bookmark={bookmark} showBasal={false} />
       </div>
     </div>
   );
