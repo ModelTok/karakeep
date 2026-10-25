@@ -3,6 +3,7 @@ import { adminAppRouter } from "./admin";
 import { apiKeysAppRouter } from "./apiKeys";
 import { assetsAppRouter } from "./assets";
 import { backupsAppRouter } from "./backups";
+import { basalAppRouter } from "./basal";
 import { bookmarksAppRouter } from "./bookmarks";
 import { configAppRouter } from "./config";
 import { feedsAppRouter } from "./feeds";
@@ -37,6 +38,7 @@ export const appRouter = router({
   publicBookmarks: publicBookmarks,
   subscriptions: subscriptionsRouter,
   config: configAppRouter,
+  basal: basalAppRouter,
 });
 // export type definition of API
 export type AppRouter = typeof appRouter;

@@ -278,6 +278,20 @@ const allEnv = z.object({
   EVENT_LOGS_ENABLED: stringBool("false"),
   OTEL_EVENT_LOGS_EXPORT_ENABLED: stringBool("false"),
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: z.string().url().optional(),
+
+  // Basal feed scoring (host-side HTTP bridge to the engine)
+  BASAL_BRIDGE_URL: z
+    .string()
+    .url()
+    .default("http://host.docker.internal:8010"),
+  // Tests and UI-only fallback: fake deterministic scores instead of calling
+  // the bridge. Must be reported to the UI whenever it is used. Accepts "1"/"0"
+  // in addition to "true"/"false" because the basal client reads BASAL_MOCK=1.
+  BASAL_MOCK: z
+    .string()
+    .prefault("false")
+    .refine((s) => ["true", "false", "1", "0"].includes(s))
+    .transform((s) => s === "true" || s === "1"),
 });
 
 const serverConfigSchema = allEnv.transform((val, ctx) => {
@@ -545,6 +559,10 @@ const serverConfigSchema = allEnv.transform((val, ctx) => {
         enabled: val.OTEL_EVENT_LOGS_EXPORT_ENABLED,
         endpoint: val.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT,
       },
+    },
+    basal: {
+      bridgeUrl: val.BASAL_BRIDGE_URL,
+      mock: val.BASAL_MOCK,
     },
   };
   if (obj.auth.emailVerificationRequired && !obj.email.smtp) {
