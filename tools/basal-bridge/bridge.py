@@ -5,7 +5,7 @@ It owns a `basal-serve` child process (loopback only), exposes three endpoints o
 the Docker bridge gateway, and owns the calibration lifecycle:
 
     GET  /health  -> {ok, model, mode, calibration_id, engine_version, ...}
-    POST /score   -> {items: [{id, state}]} -> per-item usefulness decision
+    POST /score   -> {items: [{id, state}], question?, questionName?} -> per-item decision
     POST /train   -> {requests: ["<json line>", ...]} -> calibration id + report
 
 No authentication: bind it to the Karakeep docker bridge gateway so it is not
@@ -245,15 +245,17 @@ serve = ServeProcess()
 
 
 # -- scoring ------------------------------------------------------------------
-def ask_systemone(state: str, question: dict, timeout: float = SCORE_TIMEOUT) -> dict:
-    payload = {"state": state, "questions": {"usefulness": question}}
+def ask_systemone(
+    state: str, question: dict, question_name: str = "usefulness", timeout: float = SCORE_TIMEOUT
+) -> dict:
+    payload = {"state": state, "questions": {question_name: question}}
     return http_json(
         "POST", f"http://{SERVE_HOST}:{SERVE_PORT}/v1/systemone", payload, timeout=timeout
     )
 
 
-def score_one(item: dict, question: dict) -> dict:
-    answer = ask_systemone(item["state"], question)["answers"]["usefulness"]
+def score_one(item: dict, question: dict, question_name: str = "usefulness") -> dict:
+    answer = ask_systemone(item["state"], question, question_name)["answers"][question_name]
     raw = answer.get("probabilities") or {}
     probs = {LABELS[int(k)]: float(v) for k, v in raw.items() if str(k).isdigit()}
     for label in LABELS:
@@ -271,9 +273,9 @@ def score_one(item: dict, question: dict) -> dict:
     }
 
 
-def score_items(items: list[dict], question: dict) -> list[dict]:
+def score_items(items: list[dict], question: dict, question_name: str = "usefulness") -> list[dict]:
     started = time.time()
-    futures = [_pool.submit(score_one, item, question) for item in items]
+    futures = [_pool.submit(score_one, item, question, question_name) for item in items]
     results = []
     errors = []
     for item, fut in zip(items, futures):
@@ -462,12 +464,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "items must be a non-empty list"})
             return
         question = body.get("question") or USEFULNESS_QUESTION
+        question_name = body.get("questionName") or "usefulness"
+        if not isinstance(question_name, str):
+            self._send(400, {"error": "questionName must be a string"})
+            return
         if not serve.running():
             self._send(503, {"ok": False, "error": "basal-serve is not running", "health": self.health()})
             return
         try:
             started = time.time()
-            results, errors = score_items(items, question)
+            results, errors = score_items(items, question, question_name)
             elapsed = time.time() - started
         except Exception as exc:  # noqa: BLE001
             self._send(502, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
