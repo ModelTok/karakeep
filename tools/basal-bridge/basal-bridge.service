@@ -16,8 +16,13 @@ Environment=BASAL_SERVE_PORT=8011
 Environment=BASAL_BRIDGE_PORT=8010
 Environment=BASAL_TARGETS=0.01,0.05
 Environment=BASAL_MIN_PER_TYPE=50
+# basal-serve (~2 GB RSS) starts on the first /score or /train and stops after
+# this many idle seconds. 0 keeps it up once started.
+Environment=BASAL_IDLE_TIMEOUT=900
 Restart=on-failure
 RestartSec=5
+# The bridge stops basal-serve on SIGTERM; give it time before SIGKILL.
+TimeoutStopSec=30
 StandardOutput=journal
 StandardError=journal
 

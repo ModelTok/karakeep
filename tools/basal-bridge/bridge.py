@@ -2,7 +2,9 @@
 """basal-bridge: the only HTTP surface Karakeep is allowed to talk to.
 
 It owns a `basal-serve` child process (loopback only), exposes three endpoints on
-the Docker bridge gateway, and owns the calibration lifecycle:
+the Docker bridge gateway, and owns the calibration lifecycle. The engine holds
+~2 GB of RAM, so it is started lazily by the first /score or /train and stopped
+again after BASAL_IDLE_TIMEOUT seconds without requests:
 
     GET  /health  -> {ok, model, mode, calibration_id, engine_version, ...}
     POST /score   -> {items: [{id, state}], question?, questionName?} -> per-item decision
@@ -19,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -27,10 +30,11 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 HOME = Path(os.path.expanduser("~"))
 BRIDGE_DIR = Path(os.environ.get("BASAL_BRIDGE_DIR", HOME / "basal-bridge"))
@@ -92,6 +96,9 @@ TRAIN_TIMEOUT = float(os.environ.get("BASAL_TRAIN_TIMEOUT", "3600"))
 # finished. Sequential scoring keeps one item's wait equal to one decision.
 SCORE_CONCURRENCY = int(os.environ.get("BASAL_SCORE_CONCURRENCY", "1"))
 START_TIMEOUT = float(os.environ.get("BASAL_START_TIMEOUT", "180"))
+# Seconds without /score or /train after which basal-serve is stopped to give its
+# ~2 GB back. 0 disables the stop; the engine is still only started on demand.
+IDLE_TIMEOUT = float(os.environ.get("BASAL_IDLE_TIMEOUT", "900"))
 TARGETS = os.environ.get("BASAL_TARGETS", "0.01,0.05")
 MIN_PER_TYPE = os.environ.get("BASAL_MIN_PER_TYPE", "50")
 
@@ -109,10 +116,22 @@ USEFULNESS_QUESTION = {
 LABELS = ["slaby", "sredni", "ciekawy"]
 
 _lock = threading.Lock()  # guards the serve child process
+# Serialises every start/stop sequence: lazy starts, the idle stop and the
+# stop/calibrate/restart of /train. Always taken before _lock, never after it.
+_start_lock = threading.Lock()
 _train_lock = threading.Lock()  # one calibration at a time
 # Set while basal-calibrate holds the machine and basal-serve is stopped. /score
 # answers 503 instead of waiting on a dead engine, /health reports it.
 _calibrating = threading.Event()
+# Set while a lazy start waits for the engine to become ready.
+_starting = threading.Event()
+# Set on SIGTERM/SIGINT so a start in progress gives up instead of blocking exit.
+_stopping = threading.Event()
+# Requests doing scoring or training work. The idle watchdog never stops the
+# engine while this is non-zero; it holds _inflight_lock while it decides and
+# stops, so a request cannot slip in between the check and the stop.
+_inflight = 0
+_inflight_lock = threading.Lock()
 _pool = ThreadPoolExecutor(max_workers=SCORE_CONCURRENCY)
 
 
@@ -154,14 +173,25 @@ class ServeProcess:
 
     def __init__(self) -> None:
         self.proc: subprocess.Popen | None = None
+        self.ready = False  # set once wait_ready() succeeded for self.proc
         self.calibration_path: Path | None = None
         self.log_path = BRIDGE_DIR / "basal-serve.log"
+        # time.monotonic() of the last /score or /train activity, None until the first.
+        self.last_used: float | None = None
 
     # -- state ---------------------------------------------------------------
     def calibration_id(self) -> str | None:
         if self.calibration_path and self.calibration_path.exists():
             return sha256_file(self.calibration_path)
         return None
+
+    def touch(self) -> None:
+        self.last_used = time.monotonic()
+
+    def idle_seconds(self) -> float | None:
+        if self.last_used is None:
+            return None
+        return time.monotonic() - self.last_used
 
     def _command(self, calibration: Path | None) -> list[str]:
         cmd = [
@@ -194,9 +224,16 @@ class ServeProcess:
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
+    def serving(self) -> bool:
+        """Running and past wait_ready: the process is alive during a start too."""
+        return self.ready and self.running()
+
     def wait_ready(self, timeout: float = START_TIMEOUT) -> bool:
         deadline = time.time() + timeout
         while time.time() < deadline:
+            if _stopping.is_set():
+                log("basal-bridge is shutting down; abandoning the basal-serve start")
+                return False
             if self.proc is not None and self.proc.poll() is not None:
                 log("basal-serve exited during startup")
                 return False
@@ -204,8 +241,33 @@ class ServeProcess:
                 http_json("GET", f"http://{SERVE_HOST}:{SERVE_PORT}/health", timeout=3)
                 return True
             except Exception:
-                time.sleep(1.0)
+                # Short poll: a request is waiting on this cold start.
+                time.sleep(0.25)
         return False
+
+    def ensure_running(self) -> bool:
+        """Start the engine if it is down and block until it is ready.
+
+        Returns True when this call started the engine. Raises RuntimeError when
+        the start failed.
+        """
+        if self.serving():
+            return False
+        with _start_lock:
+            if self.serving():
+                # Another request (or a /train restart) won the race.
+                return False
+            calibration = self.calibration_path or self.load_active_calibration()
+            log("basal-serve is down; starting it for an incoming request")
+            _starting.set()
+            try:
+                self.start(calibration)
+            finally:
+                _starting.clear()
+            # The idle clock starts when the engine is ready, not when the
+            # request arrived: a slow start must not count as idle time.
+            self.touch()
+            return True
 
     def start(self, calibration: Path | None) -> None:
         with _lock:
@@ -214,21 +276,24 @@ class ServeProcess:
             logf = self.log_path.open("a", encoding="utf-8")
             logf.write(f"\n=== start {time.strftime('%Y-%m-%dT%H:%M:%S')} ===\n")
             logf.flush()
-            self.proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
-                self._command(calibration),
-                stdout=logf,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+            with logf:  # the child keeps its own copy of the descriptor
+                self.proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+                    self._command(calibration),
+                    stdout=logf,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
             self.calibration_path = calibration
             if not self.wait_ready():
                 log(f"basal-serve did not become ready; see {self.log_path}")
                 self.stop_locked()
                 raise RuntimeError(f"basal-serve did not start, see {self.log_path}")
+            self.ready = True
             self.save_state()
             log(f"basal-serve ready on {SERVE_HOST}:{SERVE_PORT} (mode {MODE})")
 
     def stop_locked(self) -> None:
+        self.ready = False
         if self.proc is None:
             return
         if self.proc.poll() is None:
@@ -282,6 +347,117 @@ class ServeProcess:
 
 
 serve = ServeProcess()
+
+
+# -- idle lifecycle ------------------------------------------------------------
+@contextmanager
+def in_flight():
+    """Mark a /score or /train request as busy and reset the idle clock."""
+    global _inflight
+    with _inflight_lock:
+        _inflight += 1
+        serve.touch()
+    try:
+        yield
+    finally:
+        with _inflight_lock:
+            _inflight -= 1
+            serve.touch()
+
+
+def inflight_count() -> int:
+    with _inflight_lock:
+        return _inflight
+
+
+def idle_tick(idle_timeout: float | None = None) -> bool:
+    """Stop the engine when it has been idle long enough. True when it stopped it."""
+    timeout = IDLE_TIMEOUT if idle_timeout is None else idle_timeout
+    if timeout <= 0 or not serve.running() or _calibrating.is_set():
+        return False
+    # A start, an idle stop or a calibration is in progress: try again next tick.
+    if not _start_lock.acquire(blocking=False):
+        return False
+    try:
+        with _inflight_lock:
+            idle = serve.idle_seconds()
+            if (
+                _inflight > 0
+                or _calibrating.is_set()
+                or not serve.running()
+                or idle is None
+                or idle < timeout
+            ):
+                return False
+            log(f"basal-serve idle for {idle:.0f}s (timeout {timeout:g}s); stopping it")
+            serve.stop()
+            return True
+    finally:
+        _start_lock.release()
+
+
+def idle_watchdog(stop: threading.Event, idle_timeout: float | None = None) -> None:
+    timeout = IDLE_TIMEOUT if idle_timeout is None else idle_timeout
+    if timeout <= 0:
+        return
+    tick = max(0.1, min(1.0, timeout / 5))
+    while not stop.wait(tick):
+        try:
+            idle_tick(timeout)
+        except Exception as exc:  # noqa: BLE001 - the watchdog must survive
+            log(f"idle watchdog error: {type(exc).__name__}: {exc}")
+
+
+def health_payload() -> dict:
+    proc = serve.proc  # one snapshot: a concurrent stop may clear serve.proc
+    exit_code = proc.poll() if proc is not None else None
+    running = proc is not None and exit_code is None
+    idle = serve.idle_seconds()
+    info = {
+        "ok": False,
+        "model": MODEL_DIR.name,
+        "mode": MODE,
+        "calibration_id": serve.calibration_id(),
+        "calibration_path": str(serve.calibration_path) if serve.calibration_path else None,
+        "engine_version": engine_version(),
+        "bridge_version": VERSION,
+        "serve_running": running,
+        "serve_idle": proc is None and not _calibrating.is_set(),
+        "serve_starting": _starting.is_set(),
+        "idle_timeout_s": IDLE_TIMEOUT,
+        "idle_seconds": round(idle, 1) if idle is not None else None,
+        "calibrating": _calibrating.is_set(),
+    }
+    if _calibrating.is_set():
+        # basal-serve is stopped on purpose while basal-calibrate runs.
+        info["error"] = "calibration in progress; the engine is stopped until it finishes"
+        return info
+    if _starting.is_set():
+        # A request is waiting on a cold start; it will get a normal answer.
+        info["ok"] = True
+        return info
+    if proc is None:
+        # Never started or stopped after the idle timeout: the next /score or
+        # /train starts it. Nothing listens on the engine port, do not probe it.
+        info["ok"] = True
+        return info
+    if exit_code is not None:
+        info["error"] = f"basal-serve exited with code {exit_code}; see {serve.log_path}"
+        return info
+    try:
+        probe = http_json("GET", f"http://{SERVE_HOST}:{SERVE_PORT}/health", timeout=5)
+        models = http_json("GET", f"http://{SERVE_HOST}:{SERVE_PORT}/v1/models", timeout=5)
+        names = [m.get("name") for m in (models or {}).get("models", [])]
+        info.update(
+            {
+                "ok": bool(probe) and probe.get("status") == "ok",
+                "serve_status": probe,
+                "serve_models": names,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        info["error"] = f"{type(exc).__name__}: {exc}"
+    return info
 
 
 # -- scoring ------------------------------------------------------------------
@@ -395,7 +571,14 @@ def run_train(requests: list[str]) -> dict:
     # every core. Running it next to basal-serve doubled peak memory and made a
     # concurrent 3-item /score time out after 244 s on this box, so the engine is
     # stopped for the duration and restarted with the new file afterwards.
-    previous = serve.calibration_path
+    # _start_lock is held from the stop to the restart so no /score can start
+    # the engine next to basal-calibrate; such a request waits for the restart.
+    with _start_lock:
+        return _calibrate_locked(requests, cmd, stamp, out)
+
+
+def _calibrate_locked(requests: list[str], cmd: list[str], stamp: str, out: Path) -> dict:
+    previous = serve.calibration_path or serve.load_active_calibration()
     log(f"basal-calibrate start ({len(requests)} requests); basal-serve stopped")
     serve.stop()
     _calibrating.set()
@@ -428,15 +611,23 @@ def run_train(requests: list[str]) -> dict:
     except BaseException:
         # Never leave the engine down: restore whatever calibration was active.
         _calibrating.clear()
-        serve.start(previous)
+        try:
+            serve.start(previous)
+            serve.touch()
+        except Exception as exc:  # noqa: BLE001 - report the calibration error, not this one
+            log(f"basal-serve did not restart after the failed calibration: {exc}")
         raise
     _calibrating.clear()
     log(f"basal-calibrate done in {duration_s:.0f}s, calibration {cert_id}")
+    restart_started = time.monotonic()
     serve.restart(final)
+    restart_ms = round((time.monotonic() - restart_started) * 1000, 1)
+    serve.touch()
     return {
         "calibration_id": cert_id,
         "path": str(final),
         "duration_s": round(duration_s),
+        "restart_ms": restart_ms,
         "report": {
             "accuracy": parsed.get("accuracy"),
             "ece": parsed.get("ece"),
@@ -501,35 +692,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def health(self) -> dict:
-        info = {
-            "ok": False,
-            "model": MODEL_DIR.name,
-            "mode": MODE,
-            "calibration_id": serve.calibration_id(),
-            "calibration_path": str(serve.calibration_path) if serve.calibration_path else None,
-            "engine_version": engine_version(),
-            "bridge_version": VERSION,
-            "serve_running": serve.running(),
-            "calibrating": _calibrating.is_set(),
-        }
-        if _calibrating.is_set():
-            # basal-serve is stopped on purpose while basal-calibrate runs.
-            info["error"] = "calibration in progress; the engine is stopped until it finishes"
-            return info
-        try:
-            probe = http_json("GET", f"http://{SERVE_HOST}:{SERVE_PORT}/health", timeout=5)
-            models = http_json("GET", f"http://{SERVE_HOST}:{SERVE_PORT}/v1/models", timeout=5)
-            names = [m.get("name") for m in (models or {}).get("models", [])]
-            info.update(
-                {
-                    "ok": bool(probe) and probe.get("status") == "ok",
-                    "serve_status": probe,
-                    "serve_models": names,
-                }
-            )
-        except Exception as exc:  # noqa: BLE001
-            info["error"] = f"{type(exc).__name__}: {exc}"
-        return info
+        return health_payload()
 
     def handle_score(self, body: dict) -> None:
         items = body.get("items") or []
@@ -551,16 +714,30 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             return
-        if not serve.running():
-            self._send(503, {"ok": False, "error": "basal-serve is not running", "health": self.health()})
-            return
-        try:
-            started = time.time()
-            results, errors = score_items(items, question, question_name)
-            elapsed = time.time() - started
-        except Exception as exc:  # noqa: BLE001
-            self._send(502, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
-            return
+        with in_flight():
+            start_began = time.monotonic()
+            try:
+                # Blocks through a cold start (or a /train restart) so the caller
+                # gets a real answer instead of a 503.
+                engine_started = serve.ensure_running()
+            except Exception as exc:  # noqa: BLE001
+                self._send(
+                    503,
+                    {
+                        "ok": False,
+                        "error": f"basal-serve failed to start: {exc}",
+                        "health": self.health(),
+                    },
+                )
+                return
+            start_ms = round((time.monotonic() - start_began) * 1000, 1) if engine_started else 0
+            try:
+                started = time.time()
+                results, errors = score_items(items, question, question_name)
+                elapsed = time.time() - started
+            except Exception as exc:  # noqa: BLE001
+                self._send(502, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+                return
         self._send(
             200,
             {
@@ -570,6 +747,8 @@ class Handler(BaseHTTPRequestHandler):
                 "model": MODEL_DIR.name,
                 "calibration_id": serve.calibration_id(),
                 "elapsed_ms": round(elapsed * 1000, 1),
+                "engine_started": engine_started,
+                "start_ms": start_ms,
             },
         )
 
@@ -582,7 +761,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(409, {"ok": False, "error": "a calibration is already running"})
             return
         try:
-            result = run_train(requests)
+            with in_flight():
+                result = run_train(requests)
         except subprocess.TimeoutExpired:
             self._send(504, {"ok": False, "error": f"basal-calibrate timed out after {TRAIN_TIMEOUT}s"})
             return
@@ -614,24 +794,53 @@ def detect_bind_host() -> str:
     return "127.0.0.1"
 
 
+_server: ThreadingHTTPServer | None = None
+_watchdog_stop = threading.Event()
+
+
+def request_shutdown(reason: str = "shutdown requested") -> None:
+    """Stop serving and let main() stop the engine. Safe from a signal handler."""
+    log(f"{reason}; stopping basal-bridge")
+    _stopping.set()
+    _watchdog_stop.set()
+    if _server is not None:
+        # shutdown() blocks until serve_forever() returns, and serve_forever()
+        # runs on the thread the signal handler interrupted: call it elsewhere.
+        threading.Thread(target=_server.shutdown, daemon=True).start()
+
+
+def _install_signal_handlers() -> None:
+    if threading.current_thread() is not threading.main_thread():
+        return  # signal.signal only works there; tests run main() in a thread
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, lambda num, _frame: request_shutdown(signal.Signals(num).name))
+
+
 def main() -> int:
-    global BIND_HOST
+    global BIND_HOST, _server
     BIND_HOST = detect_bind_host()
     BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
     CALIBRATIONS_DIR.mkdir(parents=True, exist_ok=True)
-    active = serve.load_active_calibration()
+    # The engine is not started here: the first /score or /train starts it.
+    # Resolve the calibration anyway so /health reports its id while stopped.
+    serve.calibration_path = serve.load_active_calibration()
+    _server = ThreadingHTTPServer((BIND_HOST, BIND_PORT), Handler)
+    _install_signal_handlers()
+    threading.Thread(
+        target=idle_watchdog, args=(_watchdog_stop,), name="idle-watchdog", daemon=True
+    ).start()
+    idle = f"idle timeout {IDLE_TIMEOUT:g}s" if IDLE_TIMEOUT > 0 else "idle stop disabled"
+    log(f"basal-bridge {VERSION} on http://{BIND_HOST}:{BIND_PORT} (engine {SERVE_HOST}:{SERVE_PORT} on demand, {idle}, model {MODEL_DIR.name}, mode {MODE})")
     try:
-        serve.start(active)
-    except Exception as exc:  # noqa: BLE001 - keep serving /health so the UI can show why
-        log(f"basal-serve failed to start: {exc}")
-    server = ThreadingHTTPServer((BIND_HOST, BIND_PORT), Handler)
-    log(f"basal-bridge {VERSION} on http://{BIND_HOST}:{BIND_PORT} (engine {SERVE_HOST}:{SERVE_PORT}, model {MODEL_DIR.name}, mode {MODE})")
-    try:
-        server.serve_forever()
+        _server.serve_forever()
     except KeyboardInterrupt:
         log("interrupted")
     finally:
+        _stopping.set()
+        _watchdog_stop.set()
+        _server.server_close()
         serve.stop()
+        log("basal-bridge stopped")
     return 0
 
 

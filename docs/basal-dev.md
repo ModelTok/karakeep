@@ -111,6 +111,33 @@ The engine and bridge are already installed on this host (`~/basal-env`,
 curl -s http://172.22.0.1:8010/health | jq
 ```
 
+The bridge keeps `basal-serve` (~1.94 GB RSS) out of RAM when idle:
+
+- It does not start the engine at boot. The first `/score` or `/train` starts
+  it and waits for it, so that request pays a cold start of ~10 s on this host
+  (reported as `engine_started: true` and `start_ms` in the `/score`
+  response). Requests that arrive during the start wait for the same start;
+  none of them gets a 503.
+- After `BASAL_IDLE_TIMEOUT` seconds without a `/score` or `/train` (default
+  900, set in `basal-bridge.service`; `0` disables the stop) the engine is
+  stopped. It is never stopped while a request is in flight or a calibration
+  runs.
+- While stopped, `/health` answers `ok: true`, `serve_running: false`,
+  `serve_idle: true`, with `idle_timeout_s`, `idle_seconds` and the active
+  `calibration_id`. `ok: false` means a real problem: a calibration in
+  progress, or an engine process that died.
+- The 90 s per item score budget on the Karakeep side absorbs the cold start.
+
+Verify:
+
+```bash
+curl -s http://172.22.0.1:8010/health | jq '{ok, serve_running, serve_idle, idle_seconds}'
+curl -s -X POST http://172.22.0.1:8010/score -H 'Content-Type: application/json' \
+  -d '{"items":[{"id":"t","state":"Tytuł: test"}]}' | jq '{ok, engine_started, start_ms}'
+journalctl --user -u basal-bridge -n 20 | grep -E 'starting it|idle for'
+python3 tools/basal-bridge/test_bridge.py   # stdlib tests against a fake engine
+```
+
 Then a dev instance on a copy of the production data:
 
 ```bash
