@@ -73,18 +73,26 @@ Host: HP EliteDesk 800 G3 SFF, i7-7700, 16 GB RAM, CPU only, no GPU.
 | `basal-2.0-mini` Q8_0, short state (spike, 274 input tokens) | 3.8-4.2 s per decision; 7.7 s with the CPU otherwise busy |
 | `basal-2.0-mini` Q8_0, full state (12 000 char text cap, ~3.5k input tokens) | 45-55 s per decision |
 | `basal-calibrate` on 12 labelled lines | 83 s with the CPU busy |
-| `basal-calibrate` on 23 labelled lines (real ratings) | see the run log in the card; same order of magnitude |
+| `basal-calibrate` on 25 labelled decisions, training states capped at 2 500 chars | **411 s** (~16 s per decision, measured 2026-10-26) |
+| `scoreIncoming(limit=3)` end to end, 12 000 char scoring states | **121 s** (measured 2026-10-26) |
+| `scoreFeeds(limit=3)`, feed summaries | **15 s** (measured 2026-10-26) |
 
 Consequences, all of them reflected in code:
 
 - `basal-2.0-mini` Q8_0 stays the chosen model: it is under the 8 s per decision
   budget for short states, and no measured decision came close to the 8 s
   fall-back threshold for `basal-omni-pico`.
-- The score client budget is 900 s per **request** (10 items per request,
-  sequential scoring on the bridge), not 180 s. A 180 s budget produced
-  `Basal bridge ... is unavailable: no response within 180 s` for every batch of
-  five full-text items. See `BASAL_SCORE_TIMEOUT_MS` in
-  `packages/shared/basal/client.ts`.
+- The score client budget scales with the batch: 90 s per item, capped at
+  900 s per request (`scoreTimeoutForBatch` in
+  `packages/shared/basal/client.ts`). The request goes through undici's own
+  fetch with a dispatcher whose `headersTimeout`/`bodyTimeout` follow that
+  budget, because Node's global fetch has a fixed 300 s header timeout that no
+  option can raise — a 10-item batch of full-text states failed with
+  `UND_ERR_HEADERS_TIMEOUT` before the Python-side timeout was ever reached.
+- Training sends states capped at 2 500 characters (`BASAL_TRAIN_STATE_CHAR_CAP`)
+  instead of the 12 000 used for scoring: calibration re-runs every labelled
+  request through the model, so the cap is what keeps 25-85 decisions in the
+  minutes range instead of the hours range.
 - A default `maxItems` of 50 means roughly 40-45 minutes of CPU for one
   `Oceń przychodzące` click with full-text states. That is expected, not a hang;
   the job keeps its progress in the database and the settings page polls it.
@@ -122,6 +130,17 @@ NEXTAUTH_SECRET="$(openssl rand -base64 32)" \
 NEXTAUTH_URL="http://localhost:3000" \
 BASAL_BRIDGE_URL="http://172.22.0.1:8010" \
 PORT=3000 pnpm dev
+```
+
+`pnpm dev` is fine for clicking around, but it is **not** fine for running a
+job: Turbopack re-evaluates the job module on any edit and the in-process job
+dies with "Zadanie przerwane: serwer został zrestartowany." To exercise scoring
+or calibration end to end, run a stable build instead:
+
+```bash
+cd apps/web && pnpm build
+DATA_DIR="$DEV" NEXTAUTH_SECRET="..." NEXTAUTH_URL="http://localhost:3000" \
+BASAL_BRIDGE_URL="http://172.22.0.1:8010" PORT=3000 pnpm start
 ```
 
 `DATA_DIR` decides both the SQLite file (`$DATA_DIR/db.db`) and the assets
