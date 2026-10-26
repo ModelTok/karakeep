@@ -497,18 +497,51 @@ export const basalAppRouter = router({
       z
         .object({
           limit: z.number().int().min(1).optional(),
+          // Score only these feeds; each one must belong to the caller.
+          feedIds: z
+            .array(z.string())
+            .min(1)
+            .max(BASAL_MAX_ITEMS_CAP)
+            .optional(),
         })
         .optional(),
     )
     .output(z.object({ jobId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.user.id;
-      const [{ feeds }] = await ctx.db
-        .select({ feeds: count() })
-        .from(rssFeedsTable)
-        .where(eq(rssFeedsTable.userId, userId));
+      const feedIds = input?.feedIds ? [...new Set(input.feedIds)] : undefined;
+      let feeds: number;
+      if (feedIds) {
+        const owned = await ctx.db
+          .select({ id: rssFeedsTable.id })
+          .from(rssFeedsTable)
+          .where(
+            and(
+              eq(rssFeedsTable.userId, userId),
+              inArray(rssFeedsTable.id, feedIds),
+            ),
+          );
+        if (owned.length !== feedIds.length) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Feed not found",
+          });
+        }
+        feeds = feedIds.length;
+      } else {
+        const [{ feeds: feedCount }] = await ctx.db
+          .select({ feeds: count() })
+          .from(rssFeedsTable)
+          .where(eq(rssFeedsTable.userId, userId));
+        feeds = feedCount;
+      }
       const limit = clamp(input?.limit ?? feeds, 1, BASAL_MAX_ITEMS_CAP);
-      const jobId = await startBasalScoreFeedsJob(ctx.db, userId, limit);
+      const jobId = await startBasalScoreFeedsJob(
+        ctx.db,
+        userId,
+        limit,
+        feedIds,
+      );
       return { jobId };
     }),
 

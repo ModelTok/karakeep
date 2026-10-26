@@ -63,6 +63,7 @@ import {
 } from "../ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import BasalFeedRatingButtons from "./BasalFeedRatingButtons";
+import BasalFeedScoreButton from "./BasalFeedScoreButton";
 import { SettingsPage, SettingsSection } from "./SettingsPage";
 
 // Mirrors one row of the basal.feedQuality query result.
@@ -536,10 +537,13 @@ export function FeedRow({
         )}
       </TableCell>
       <TableCell>
-        <BasalFeedRatingButtons
-          feedId={feed.id}
-          rating={basalQuality?.userRating ?? null}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <BasalFeedRatingButtons
+            feedId={feed.id}
+            rating={basalQuality?.userRating ?? null}
+          />
+          <BasalFeedScoreButton feedId={feed.id} />
+        </div>
       </TableCell>
       <TableCell>
         <BasalFeedScoreCell quality={basalQuality} />

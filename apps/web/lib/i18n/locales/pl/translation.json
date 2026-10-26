@@ -126,7 +126,10 @@
       "quality": "Jakość",
       "suggest_disable": "Sugestia: wyłącz feed",
       "no_data": "brak danych",
-      "scoring_stale": "nieaktualna kalibracja"
+      "scoring_stale": "nieaktualna kalibracja",
+      "score": "Oceń",
+      "score_hint": "Oceń ten feed modelem basal",
+      "scored": "Ocena feedu zaktualizowana"
     }
   },
   "settings": {

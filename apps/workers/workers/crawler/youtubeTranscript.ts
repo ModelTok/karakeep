@@ -66,6 +66,25 @@ export function parseSrt(
 }
 
 /**
+ * Builds the value stored in `bookmarkLinks.description` for a YouTube
+ * video: the page's meta description, an empty line, then the transcript.
+ * Only the transcript is capped, at `maxChars` characters; an empty meta
+ * description yields the transcript alone. Pure function.
+ */
+export function buildYoutubeDescription(
+  metaDescription: string | null | undefined,
+  transcript: string,
+  maxChars: number = serverConfig.crawler.ytTranscriptMaxChars,
+): string {
+  const meta = (metaDescription ?? "").trim();
+  const text = transcript.trim().slice(0, maxChars);
+  if (!text) {
+    return meta;
+  }
+  return meta ? `${meta}\n\n${text}` : text;
+}
+
+/**
  * Fetches only the subtitles for a YouTube video via yt-dlp
  * (--skip-download, independent of CRAWLER_VIDEO_DOWNLOAD/
  * CRAWLER_YTDLP_ARGS). Returns null if no captions are available -

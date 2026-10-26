@@ -97,12 +97,23 @@ export function buildBasalState(input: BasalStateInput): BasalState {
 export const BASAL_FEED_HEADLINE_COUNT = 10;
 // Value stored in the stateKind column for feed scores.
 export const BASAL_FEED_STATE_KIND = "feed_summary";
+// Number of newest YouTube videos whose transcripts are added to a feed state.
+export const BASAL_FEED_VIDEO_COUNT = 2;
+// Per-video transcript excerpt length; the whole state still goes through
+// BASAL_STATE_CHAR_CAP afterwards.
+export const BASAL_FEED_VIDEO_TRANSCRIPT_CHARS = 3000;
+
+export interface BasalFeedVideoInput {
+  title?: string | null;
+  transcript: string;
+}
 
 export interface BasalFeedStateInput {
   name: string;
   url: string;
   description?: string | null;
   headlines: string[];
+  videos?: BasalFeedVideoInput[];
 }
 
 /**
@@ -120,6 +131,16 @@ export function buildBasalFeedState(input: BasalFeedStateInput): {
     .map(clean)
     .filter((h) => h.length > 0)
     .slice(0, BASAL_FEED_HEADLINE_COUNT);
+  const videos = (input.videos ?? [])
+    .map((v) => ({
+      title: clean(v.title),
+      transcript: cleanMultiline(v.transcript).slice(
+        0,
+        BASAL_FEED_VIDEO_TRANSCRIPT_CHARS,
+      ),
+    }))
+    .filter((v) => v.transcript.length > 0)
+    .slice(0, BASAL_FEED_VIDEO_COUNT);
 
   const lines: string[] = [];
   if (name) {
@@ -135,9 +156,25 @@ export function buildBasalFeedState(input: BasalFeedStateInput): {
     lines.push("Ostatnie nagłówki:");
     lines.push(...headlines.map((h) => `- ${h}`));
   }
+  if (videos.length > 0) {
+    lines.push("Transkrypcje najnowszych filmów:");
+    lines.push(
+      ...videos.map((v) =>
+        v.title ? `- ${v.title}: ${v.transcript}` : `- ${v.transcript}`,
+      ),
+    );
+  }
 
   const state = capState(lines.join("\n"));
   return { state, chars: state.length };
+}
+
+const YOUTUBE_VIDEO_URL_RE =
+  /^(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/watch\?|youtu\.be\/)/;
+
+/** True for youtube.com/watch and youtu.be URLs. Pure function. */
+export function isYoutubeVideoUrl(url: string): boolean {
+  return YOUTUBE_VIDEO_URL_RE.test(url.trim());
 }
 
 /** Hostname without a leading "www.", or "" for unparsable URLs. */

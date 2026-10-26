@@ -5,6 +5,7 @@ import { execa } from "execa";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
+  buildYoutubeDescription,
   fetchYoutubeTranscript,
   isYoutubeVideoUrl,
   parseSrt,
@@ -118,6 +119,54 @@ describe("toSafeTranscriptHtml", () => {
     expect(toSafeTranscriptHtml("Hello there.")).toBe(
       `${DETAILS_OPEN}<p style="margin-top:0.75em;">Hello there.</p>${DETAILS_CLOSE}`,
     );
+  });
+});
+
+describe("buildYoutubeDescription", () => {
+  test("uses the transcript alone when the meta description is empty", () => {
+    expect(buildYoutubeDescription(null, "Cześć, tu film.")).toBe(
+      "Cześć, tu film.",
+    );
+    expect(buildYoutubeDescription("   ", "Cześć, tu film.")).toBe(
+      "Cześć, tu film.",
+    );
+    expect(buildYoutubeDescription(undefined, "Cześć, tu film.")).toBe(
+      "Cześć, tu film.",
+    );
+  });
+
+  test("joins the meta description and the transcript with a blank line", () => {
+    expect(
+      buildYoutubeDescription(
+        "Krótki opis filmu.",
+        "Pierwsza fraza transkryptu. Druga fraza.",
+      ),
+    ).toBe("Krótki opis filmu.\n\nPierwsza fraza transkryptu. Druga fraza.");
+  });
+
+  test("caps only the transcript at maxChars", () => {
+    const meta = "Meta opis";
+    const transcript = "x".repeat(5000);
+    const description = buildYoutubeDescription(meta, transcript, 100);
+    expect(description).toBe(`${meta}\n\n${"x".repeat(100)}`);
+    expect(description).toContain(meta);
+  });
+
+  test("keeps the meta description when there is no transcript", () => {
+    expect(buildYoutubeDescription("Meta opis", "  ")).toBe("Meta opis");
+  });
+
+  test("a crawled YouTube bookmark gets both the meta description and the first transcript phrase", () => {
+    // Mirrors the crawler path: Phase 1 stores the meta description, then the
+    // fetched transcript is merged into the same bookmarkLinks.description.
+    const metaDescription = "Karakeep: self-hosted bookmarks with AI tagging";
+    const transcript =
+      "Witajcie w kolejnym odcinku o samodzielnie hostowanych aplikacjach. " +
+      "Dzisiaj pokażę, jak uruchomić Karakeep na własnym serwerze.";
+    const description = buildYoutubeDescription(metaDescription, transcript);
+
+    expect(description.startsWith(metaDescription)).toBe(true);
+    expect(description).toContain("Witajcie w kolejnym odcinku");
   });
 });
 

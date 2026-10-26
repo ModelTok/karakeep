@@ -10,6 +10,7 @@ import {
   basalScoresTable,
   basalSettingsTable,
   bookmarks,
+  bookmarkLinks,
   bookmarkTags,
   rssFeedImportsTable,
   rssFeedsTable,
@@ -29,12 +30,15 @@ import {
   shouldAutoArchive,
 } from "@karakeep/shared/basal/decision";
 import type { BasalState } from "@karakeep/shared/basal/state";
+import type { BasalFeedVideoInput } from "@karakeep/shared/basal/state";
 import {
   BASAL_FEED_HEADLINE_COUNT,
   BASAL_FEED_STATE_KIND,
+  BASAL_FEED_VIDEO_COUNT,
   buildBasalFeedState,
   buildBasalState,
   domainFromUrl,
+  isYoutubeVideoUrl,
 } from "@karakeep/shared/basal/state";
 import type { BasalRating } from "@karakeep/shared/basal/types";
 import { toFeedScoreResult, toStoredScore } from "@karakeep/shared/basal/types";
@@ -343,7 +347,8 @@ export interface LoadedFeedState {
 
 /**
  * Feed summaries for the given feeds of the user. rssFeeds has no description
- * column, so the summary is built from name, url and recent headlines only.
+ * column, so the summary is built from name, url, recent headlines and the
+ * transcripts of the newest YouTube videos imported by that feed.
  */
 export async function loadFeedStates(
   db: DB,
@@ -400,11 +405,71 @@ export async function loadFeedStates(
     entry.titles.push(title);
   }
 
+  // Newest imported YouTube videos per feed; the transcript comes from
+  // bookmarkLinks.description (the crawler appends it there) and falls back
+  // to the reader-view HTML converted to plain text.
+  const videoRows = await db
+    .select({
+      feedId: rssFeedImportsTable.rssFeedId,
+      bookmarkId: bookmarks.id,
+      title: bookmarks.title,
+      url: bookmarkLinks.url,
+      description: bookmarkLinks.description,
+      htmlContent: bookmarkLinks.htmlContent,
+      contentAssetId: bookmarkLinks.contentAssetId,
+    })
+    .from(rssFeedImportsTable)
+    .innerJoin(bookmarks, eq(bookmarks.id, rssFeedImportsTable.bookmarkId))
+    .innerJoin(bookmarkLinks, eq(bookmarkLinks.id, bookmarks.id))
+    .where(
+      and(
+        inArray(rssFeedImportsTable.rssFeedId, feedIds),
+        eq(bookmarks.userId, userId),
+      ),
+    )
+    .orderBy(desc(bookmarks.createdAt), desc(bookmarks.id));
+
+  const videos = new Map<
+    string,
+    { seen: Set<string>; items: BasalFeedVideoInput[] }
+  >();
+  for (const row of videoRows) {
+    let entry = videos.get(row.feedId);
+    if (!entry) {
+      entry = { seen: new Set(), items: [] };
+      videos.set(row.feedId, entry);
+    }
+    if (
+      !isYoutubeVideoUrl(row.url) ||
+      entry.seen.has(row.bookmarkId) ||
+      entry.items.length >= BASAL_FEED_VIDEO_COUNT
+    ) {
+      continue;
+    }
+    let transcript = row.description?.trim() ?? "";
+    if (!transcript) {
+      try {
+        const html = await Bookmark.getBookmarkHtmlContent(row, userId);
+        transcript = html ? htmlToPlainText(html).trim() : "";
+      } catch (e) {
+        logger.warn(
+          `[basal] Failed to read content of feed video ${row.bookmarkId}: ${String(e)}`,
+        );
+      }
+    }
+    if (!transcript) {
+      continue;
+    }
+    entry.seen.add(row.bookmarkId);
+    entry.items.push({ title: row.title, transcript });
+  }
+
   for (const feed of feeds) {
     const { state } = buildBasalFeedState({
       name: feed.name,
       url: feed.url,
       headlines: headlines.get(feed.id)?.titles ?? [],
+      videos: videos.get(feed.id)?.items ?? [],
     });
     out.set(feed.id, { name: feed.name, url: feed.url, state });
   }
@@ -587,15 +652,25 @@ async function runScoreJob(ctx: JobContext, limit: number) {
 // ---------------------------------------------------------------------------
 // Feed score job
 
-export function startBasalScoreFeedsJob(db: DB, userId: string, limit: number) {
+export function startBasalScoreFeedsJob(
+  db: DB,
+  userId: string,
+  limit: number,
+  feedIds?: string[],
+) {
   return startBasalJob(db, userId, "score_feeds", (ctx) =>
-    runScoreFeedsJob(ctx, limit),
+    runScoreFeedsJob(ctx, limit, feedIds),
   );
 }
 
 // Scores feeds with the feed_value question. Writes basalFeedScores only:
-// never archives, disables or deletes anything.
-async function runScoreFeedsJob(ctx: JobContext, limit: number) {
+// never archives, disables or deletes anything. With feedIds given, only
+// those feeds are scored; otherwise the newest `limit` feeds of the user.
+async function runScoreFeedsJob(
+  ctx: JobContext,
+  limit: number,
+  feedIds?: string[],
+) {
   const { db, userId, client, result } = ctx;
   const errors: string[] = [];
   Object.assign(result, { feedsScored: 0, failedBatches: 0, errors });
@@ -609,12 +684,19 @@ async function runScoreFeedsJob(ctx: JobContext, limit: number) {
   const feeds = await db
     .select({ id: rssFeedsTable.id })
     .from(rssFeedsTable)
-    .where(eq(rssFeedsTable.userId, userId))
+    .where(
+      feedIds
+        ? and(
+            eq(rssFeedsTable.userId, userId),
+            inArray(rssFeedsTable.id, feedIds),
+          )
+        : eq(rssFeedsTable.userId, userId),
+    )
     .orderBy(rssFeedsTable.name, rssFeedsTable.id)
     .limit(limit);
-  const feedIds = feeds.map((f) => f.id);
-  const states = await loadFeedStates(db, userId, feedIds);
-  const items = feedIds.flatMap((id) => {
+  const scoredFeedIds = feeds.map((f) => f.id);
+  const states = await loadFeedStates(db, userId, scoredFeedIds);
+  const items = scoredFeedIds.flatMap((id) => {
     const state = states.get(id);
     return state ? [{ id, state: state.state }] : [];
   });

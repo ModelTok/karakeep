@@ -131,7 +131,13 @@ function fakeClient(opts: FakeClientOptions = {}) {
 async function createBookmark(
   db: TestDB,
   userId: string,
-  opts: { title?: string; html?: string | null; createdAt?: Date } = {},
+  opts: {
+    title?: string;
+    html?: string | null;
+    createdAt?: Date;
+    url?: string;
+    description?: string | null;
+  } = {},
 ) {
   const [b] = await db
     .insert(bookmarks)
@@ -144,7 +150,8 @@ async function createBookmark(
     .returning();
   await db.insert(bookmarkLinks).values({
     id: b.id,
-    url: "https://example.com/" + b.id,
+    url: opts.url ?? "https://example.com/" + b.id,
+    description: opts.description ?? null,
     htmlContent:
       opts.html === undefined ? "<p>Article body about BIM</p>" : opts.html,
   });
@@ -667,6 +674,92 @@ describe("basal score feeds job", () => {
     );
     expect(again.result).toMatchObject({ feedsScored: 1 });
     expect(await db.select().from(basalFeedScoresTable)).toHaveLength(2);
+  });
+
+  test<CustomTestContext>("scores only the requested feeds and rejects foreign ones", async ({
+    apiCallers,
+    db,
+  }) => {
+    const userId = (await apiCallers[0].users.whoami()).id;
+    const otherId = (await apiCallers[1].users.whoami()).id;
+    const api = apiCallers[0].basal;
+    const feedA = await createFeed(db, userId, "alpha");
+    const feedB = await createFeed(db, userId, "beta");
+    const foreign = await createFeed(db, otherId, "foreign");
+    const { scoredItems } = fakeClient();
+
+    await expect(api.scoreFeeds({ feedIds: [foreign] })).rejects.toThrow(
+      /Feed not found/,
+    );
+    // A mix of owned and foreign ids is rejected as a whole.
+    await expect(api.scoreFeeds({ feedIds: [feedA, foreign] })).rejects.toThrow(
+      /Feed not found/,
+    );
+    expect(await db.select().from(basalFeedScoresTable)).toHaveLength(0);
+
+    const job = await waitForJob(
+      apiCallers[0],
+      (await api.scoreFeeds({ feedIds: [feedA] })).jobId,
+    );
+    expect(job.type).toBe("score_feeds");
+    expect(job.status).toBe("success");
+    expect(job.total).toBe(1);
+    expect(job.processed).toBe(1);
+    expect(job.result).toMatchObject({ feedsScored: 1 });
+    expect(scoredItems.map((i) => i.id)).toEqual([feedA]);
+    expect(scoredItems[0].state).toContain("Feed: alpha");
+    expect(scoredItems[0].state).not.toContain("Feed: beta");
+
+    const rows = await db.select().from(basalFeedScoresTable);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].feedId).toBe(feedA);
+    expect(rows.every((r) => r.feedId !== feedB)).toBe(true);
+  });
+
+  test<CustomTestContext>("feed states include transcripts of the newest YouTube videos", async ({
+    apiCallers,
+    db,
+  }) => {
+    const userId = (await apiCallers[0].users.whoami()).id;
+    const api = apiCallers[0].basal;
+    const feed = await createFeed(db, userId, "youtube");
+    const older = await createBookmark(db, userId, {
+      title: "Older video",
+      url: "https://www.youtube.com/watch?v=old",
+      description: "Stary transkrypt filmu.",
+      createdAt: new Date(Date.now() - 60_000),
+    });
+    const newer = await createBookmark(db, userId, {
+      title: "Newer video",
+      url: "https://youtu.be/new",
+      // What the crawler stores: meta description, blank line, transcript.
+      description: "Meta opis filmu.\n\nPierwsza fraza nowego transkryptu.",
+      createdAt: new Date(),
+    });
+    const article = await createBookmark(db, userId, { title: "Plain post" });
+    await importIntoFeed(db, feed, older);
+    await importIntoFeed(db, feed, newer);
+    await importIntoFeed(db, feed, article);
+
+    const { scoredItems } = fakeClient();
+    const job = await waitForJob(
+      apiCallers[0],
+      (await api.scoreFeeds({ feedIds: [feed] })).jobId,
+    );
+    expect(job.status).toBe("success");
+    const state = scoredItems[0].state;
+    expect(state).toContain("Feed: youtube");
+    expect(state).toContain("Transkrypcje najnowszych filmów:");
+    expect(state).toContain("Newer video: Meta opis filmu.");
+    expect(state).toContain("Pierwsza fraza nowego transkryptu.");
+    expect(state).toContain("Stary transkrypt filmu.");
+    // Newest video comes first.
+    expect(state.indexOf("Newer video")).toBeLessThan(
+      state.indexOf("Older video"),
+    );
+    // A non-video bookmark contributes a headline, not a transcript.
+    expect(state).toContain("- Plain post");
+    expect(state).not.toContain("Article body about BIM");
   });
 });
 

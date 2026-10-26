@@ -70,7 +70,10 @@
       "quality": "Quality",
       "suggest_disable": "Suggestion: disable feed",
       "no_data": "no data",
-      "scoring_stale": "stale calibration"
+      "scoring_stale": "stale calibration",
+      "score": "Score",
+      "score_hint": "Score this feed with the basal model",
+      "scored": "Feed score updated"
     }
   },
   "layouts": {

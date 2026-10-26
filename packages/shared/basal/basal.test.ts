@@ -26,11 +26,14 @@ import {
 import {
   BASAL_FEED_HEADLINE_COUNT,
   BASAL_FEED_STATE_KIND,
+  BASAL_FEED_VIDEO_COUNT,
+  BASAL_FEED_VIDEO_TRANSCRIPT_CHARS,
   BASAL_STATE_CHAR_CAP,
   BASAL_TRAIN_STATE_CHAR_CAP,
   buildBasalFeedState,
   buildBasalState,
   capTrainState,
+  isYoutubeVideoUrl,
 } from "./state";
 
 afterEach(() => {
@@ -339,6 +342,107 @@ describe("buildBasalFeedState", () => {
     });
     expect(s.chars).toBe(BASAL_STATE_CHAR_CAP);
     expect(s.state.startsWith("Feed: F\nURL: u\nOpis: ddd")).toBe(true);
+  });
+
+  test("appends transcripts of the newest videos", () => {
+    const s = buildBasalFeedState({
+      name: "YT feed",
+      url: "https://www.youtube.com/feeds/videos.xml?channel_id=x",
+      headlines: ["Odcinek 3"],
+      videos: [
+        { title: "Odcinek 2", transcript: "Pierwsza fraza transkryptu." },
+        { title: null, transcript: "Druga transkrypcja." },
+      ],
+    });
+    expect(s.state).toBe(
+      [
+        "Feed: YT feed",
+        "URL: https://www.youtube.com/feeds/videos.xml?channel_id=x",
+        "Ostatnie nagłówki:",
+        "- Odcinek 3",
+        "Transkrypcje najnowszych filmów:",
+        "- Odcinek 2: Pierwsza fraza transkryptu.",
+        "- Druga transkrypcja.",
+      ].join("\n"),
+    );
+  });
+
+  test("caps each transcript at BASAL_FEED_VIDEO_TRANSCRIPT_CHARS", () => {
+    const s = buildBasalFeedState({
+      name: "F",
+      url: "u",
+      headlines: [],
+      videos: [{ title: "V", transcript: "x".repeat(10_000) }],
+    });
+    const line = s.state.split("\n").find((l) => l.startsWith("- V: "));
+    expect(line).toBe(`- V: ${"x".repeat(BASAL_FEED_VIDEO_TRANSCRIPT_CHARS)}`);
+  });
+
+  test("keeps only the first BASAL_FEED_VIDEO_COUNT videos", () => {
+    const videos = Array.from({ length: 5 }, (_, i) => ({
+      title: `V${i + 1}`,
+      transcript: `T${i + 1}`,
+    }));
+    const s = buildBasalFeedState({
+      name: "F",
+      url: "u",
+      headlines: [],
+      videos,
+    });
+    const listed = s.state.split("\n").filter((l) => l.startsWith("- V"));
+    expect(BASAL_FEED_VIDEO_COUNT).toBe(2);
+    expect(listed).toEqual(["- V1: T1", "- V2: T2"]);
+    expect(s.state).not.toContain("V3");
+  });
+
+  test("keeps the headline-only state when the feed has no videos", () => {
+    const withEmpty = buildBasalFeedState({
+      name: "F",
+      url: "u",
+      headlines: ["H1"],
+      videos: [],
+    });
+    const withoutVideos = buildBasalFeedState({
+      name: "F",
+      url: "u",
+      headlines: ["H1"],
+    });
+    expect(withEmpty.state).toBe(withoutVideos.state);
+    expect(withEmpty.state).not.toContain("Transkrypcje");
+  });
+
+  test("state with transcripts is deterministic for the same input", () => {
+    const input = {
+      name: "F",
+      url: "u",
+      headlines: ["H1", "H2"],
+      videos: [
+        { title: "V1", transcript: "To samo wejście." },
+        { title: "V2", transcript: "Drugie wejście." },
+      ],
+    };
+    expect(buildBasalFeedState(input).state).toBe(
+      buildBasalFeedState(input).state,
+    );
+  });
+});
+
+describe("isYoutubeVideoUrl", () => {
+  test("matches youtube.com watch and youtu.be URLs", () => {
+    expect(isYoutubeVideoUrl("https://www.youtube.com/watch?v=abc123")).toBe(
+      true,
+    );
+    expect(isYoutubeVideoUrl("https://youtu.be/abc123")).toBe(true);
+    expect(isYoutubeVideoUrl("https://m.youtube.com/watch?v=abc123")).toBe(
+      true,
+    );
+  });
+
+  test("rejects unrelated URLs", () => {
+    expect(isYoutubeVideoUrl("https://example.com/watch?v=abc123")).toBe(false);
+    expect(isYoutubeVideoUrl("https://www.youtube.com/feeds/videos.xml")).toBe(
+      false,
+    );
   });
 });
 

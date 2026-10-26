@@ -53,6 +53,7 @@ import { crawlPage } from "./crawlPage";
 import { runParseSubprocess } from "./parseSubprocess";
 import { redactUrlCredentials, shouldRetryCrawlStatusCode } from "./utils";
 import {
+  buildYoutubeDescription,
   fetchYoutubeTranscript,
   isYoutubeVideoUrl,
   toSafeTranscriptHtml,
@@ -357,6 +358,25 @@ export async function crawlAndParseUrl(
 
       if (isYoutubeVideoUrl(url)) {
         const transcript = await fetchYoutubeTranscript(url, jobId);
+        abortSignal.throwIfAborted();
+        if (transcript) {
+          // Phase 1 already wrote the meta description. The transcript goes
+          // into the same column through a targeted write, so the reader-view
+          // content stored below stays untouched and the two writes cannot
+          // overwrite each other.
+          const description = buildYoutubeDescription(
+            meta.description,
+            transcript,
+            serverConfig.crawler.ytTranscriptMaxChars,
+          );
+          await db
+            .update(bookmarkLinks)
+            .set({ description })
+            .where(eq(bookmarkLinks.id, bookmarkId));
+          logger.info(
+            `[Crawler][${jobId}] Stored YouTube transcript (${transcript.length} chars) in the bookmark description.`,
+          );
+        }
         if (transcript && readableContent) {
           readableContent = {
             ...readableContent,
