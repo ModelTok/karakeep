@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -52,7 +53,7 @@ SERVE_PORT = int(os.environ.get("BASAL_SERVE_PORT", "8011"))
 BIND_HOST = os.environ.get("BASAL_BRIDGE_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("BASAL_BRIDGE_PORT", "8010"))
 SCORE_TIMEOUT = float(os.environ.get("BASAL_SCORE_TIMEOUT", "180"))
-TRAIN_TIMEOUT = float(os.environ.get("BASAL_TRAIN_TIMEOUT", "1800"))
+TRAIN_TIMEOUT = float(os.environ.get("BASAL_TRAIN_TIMEOUT", "3600"))
 SCORE_CONCURRENCY = int(os.environ.get("BASAL_SCORE_CONCURRENCY", "4"))
 START_TIMEOUT = float(os.environ.get("BASAL_START_TIMEOUT", "180"))
 TARGETS = os.environ.get("BASAL_TARGETS", "0.01,0.05")
@@ -73,6 +74,9 @@ LABELS = ["slaby", "sredni", "ciekawy"]
 
 _lock = threading.Lock()  # guards the serve child process
 _train_lock = threading.Lock()  # one calibration at a time
+# Set while basal-calibrate holds the machine and basal-serve is stopped. /score
+# answers 503 instead of waiting on a dead engine, /health reports it.
+_calibrating = threading.Event()
 _pool = ThreadPoolExecutor(max_workers=SCORE_CONCURRENCY)
 
 
@@ -348,33 +352,55 @@ def run_train(requests: list[str]) -> dict:
     ]
     if MODE == "gguf":
         cmd += ["--gguf", str(GGUF_PATH)]
-    log(f"basal-calibrate start ({len(requests)} requests)")
-    proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
-        cmd, capture_output=True, text=True, timeout=TRAIN_TIMEOUT, check=False
-    )
-    raw = (proc.stdout or "") + (proc.stderr or "")
-    (CALIBRATIONS_DIR / f"report-{stamp}.txt").write_text(raw, encoding="utf-8")
-    if proc.returncode != 0 or not out.exists():
-        raise RuntimeError(f"basal-calibrate failed (exit {proc.returncode}): {raw[-2000:]}")
-    cert_id = sha256_file(out)
-    final = CALIBRATIONS_DIR / f"{cert_id}.json"
-    out.replace(final)
-    parsed = parse_report(raw)
+    if shutil.which("nice"):
+        # Keep the box responsive for the desktop while the calibration runs.
+        cmd = ["nice", "-n", "10", *cmd]
+    # basal-calibrate loads its own copy of the model (~1.7 GB resident) and uses
+    # every core. Running it next to basal-serve doubled peak memory and made a
+    # concurrent 3-item /score time out after 244 s on this box, so the engine is
+    # stopped for the duration and restarted with the new file afterwards.
+    previous = serve.calibration_path
+    log(f"basal-calibrate start ({len(requests)} requests); basal-serve stopped")
+    serve.stop()
+    _calibrating.set()
+    started = time.time()
     try:
-        cal = json.loads(final.read_text(encoding="utf-8"))
-        fitted = cal.get("fitted_on") or {}
-        parsed["decisions"] = fitted.get("decisions")
-        parsed["fit"] = fitted.get("fit")
-        parsed["cert"] = fitted.get("cert")
-        parsed["temperatures"] = cal.get("temperatures") or parsed.get("temperatures")
-        parsed["thresholds"] = cal.get("thresholds") or {}
-    except (OSError, ValueError) as exc:
-        log(f"could not read the calibration file for the report: {exc}")
-    log(f"basal-calibrate done, calibration {cert_id}")
+        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            cmd, capture_output=True, text=True, timeout=TRAIN_TIMEOUT, check=False
+        )
+        raw = (proc.stdout or "") + (proc.stderr or "")
+        (CALIBRATIONS_DIR / f"report-{stamp}.txt").write_text(raw, encoding="utf-8")
+        if proc.returncode != 0 or not out.exists():
+            raise RuntimeError(
+                f"basal-calibrate failed (exit {proc.returncode}): {raw[-2000:]}"
+            )
+        duration_s = time.time() - started
+        cert_id = sha256_file(out)
+        final = CALIBRATIONS_DIR / f"{cert_id}.json"
+        out.replace(final)
+        parsed = parse_report(raw)
+        try:
+            cal = json.loads(final.read_text(encoding="utf-8"))
+            fitted = cal.get("fitted_on") or {}
+            parsed["decisions"] = fitted.get("decisions")
+            parsed["fit"] = fitted.get("fit")
+            parsed["cert"] = fitted.get("cert")
+            parsed["temperatures"] = cal.get("temperatures") or parsed.get("temperatures")
+            parsed["thresholds"] = cal.get("thresholds") or {}
+        except (OSError, ValueError) as exc:
+            log(f"could not read the calibration file for the report: {exc}")
+    except BaseException:
+        # Never leave the engine down: restore whatever calibration was active.
+        _calibrating.clear()
+        serve.start(previous)
+        raise
+    _calibrating.clear()
+    log(f"basal-calibrate done in {duration_s:.0f}s, calibration {cert_id}")
     serve.restart(final)
     return {
         "calibration_id": cert_id,
         "path": str(final),
+        "duration_s": round(duration_s),
         "report": {
             "accuracy": parsed.get("accuracy"),
             "ece": parsed.get("ece"),
@@ -383,6 +409,7 @@ def run_train(requests: list[str]) -> dict:
             "cert": parsed.get("cert"),
             "automated_share": parsed.get("automated"),
             "thresholds": parsed.get("thresholds") or {},
+            "duration_s": round(duration_s),
             "raw": raw[-4000:],
         },
     }
@@ -399,11 +426,16 @@ class Handler(BaseHTTPRequestHandler):
     # -- helpers ------------------------------------------------------------
     def _send(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            # The caller went away mid-response (client timeout, cancelled or
+            # restarted job). One line, no traceback: the work is simply gone.
+            log(f"client disconnected before the response was written ({type(exc).__name__})")
 
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
@@ -442,7 +474,12 @@ class Handler(BaseHTTPRequestHandler):
             "engine_version": engine_version(),
             "bridge_version": VERSION,
             "serve_running": serve.running(),
+            "calibrating": _calibrating.is_set(),
         }
+        if _calibrating.is_set():
+            # basal-serve is stopped on purpose while basal-calibrate runs.
+            info["error"] = "calibration in progress; the engine is stopped until it finishes"
+            return info
         try:
             probe = http_json("GET", f"http://{SERVE_HOST}:{SERVE_PORT}/health", timeout=5)
             models = http_json("GET", f"http://{SERVE_HOST}:{SERVE_PORT}/v1/models", timeout=5)
@@ -467,6 +504,16 @@ class Handler(BaseHTTPRequestHandler):
         question_name = body.get("questionName") or "usefulness"
         if not isinstance(question_name, str):
             self._send(400, {"error": "questionName must be a string"})
+            return
+        if _calibrating.is_set():
+            self._send(
+                503,
+                {
+                    "ok": False,
+                    "error": "calibration in progress; the engine is stopped until it finishes",
+                    "health": self.health(),
+                },
+            )
             return
         if not serve.running():
             self._send(503, {"ok": False, "error": "basal-serve is not running", "health": self.health()})

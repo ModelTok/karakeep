@@ -2,6 +2,7 @@ import type { BasalQuestion } from "./decision";
 import type { BasalStateKind } from "./state";
 import type { BasalRating } from "./types";
 import { FEED_VALUE_QUESTION, USEFULNESS_QUESTION } from "./decision";
+import { capTrainState } from "./state";
 
 export interface BasalLabelledQuestion extends BasalQuestion {
   gold: BasalRating;
@@ -67,7 +68,7 @@ export function buildLabelledRequest(input: {
   return {
     id: input.id,
     group: input.group,
-    state: input.state,
+    state: capTrainState(input.state),
     questions,
   };
 }
@@ -82,7 +83,7 @@ export function buildFeedLabelledRequest(input: {
   return {
     id: input.id,
     group: input.group,
-    state: input.state,
+    state: capTrainState(input.state),
     questions: {
       feed_value: labelledQuestion(FEED_VALUE_QUESTION, input.rating),
     },

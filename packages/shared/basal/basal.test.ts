@@ -24,8 +24,10 @@ import {
   BASAL_FEED_HEADLINE_COUNT,
   BASAL_FEED_STATE_KIND,
   BASAL_STATE_CHAR_CAP,
+  BASAL_TRAIN_STATE_CHAR_CAP,
   buildBasalFeedState,
   buildBasalState,
+  capTrainState,
 } from "./state";
 
 afterEach(() => {
@@ -63,7 +65,7 @@ describe("BasalClient errors", () => {
     });
     const err = await client.train(["{}"]).catch((e) => e);
     expect(err).toBeInstanceOf(BasalUnavailableError);
-    expect((err as Error).message).toContain("no response within 1800 s");
+    expect((err as Error).message).toContain("no response within 3600 s");
   });
 
   test("500 -> BasalBridgeError with status and body excerpt", async () => {
@@ -327,6 +329,29 @@ describe("buildBasalFeedState", () => {
 });
 
 describe("dataset", () => {
+  test("training states are capped independently of scoring states", () => {
+    expect(BASAL_TRAIN_STATE_CHAR_CAP).toBeLessThan(BASAL_STATE_CHAR_CAP);
+    const long = "x".repeat(BASAL_TRAIN_STATE_CHAR_CAP + 500);
+    expect(capTrainState(long).length).toBe(BASAL_TRAIN_STATE_CHAR_CAP + 1);
+    expect(capTrainState(long).endsWith("…")).toBe(true);
+    expect(capTrainState("krótki")).toBe("krótki");
+
+    const request = buildLabelledRequest({
+      id: "b1",
+      group: "g",
+      state: long,
+      rating: 1,
+    });
+    expect(request.state.length).toBe(BASAL_TRAIN_STATE_CHAR_CAP + 1);
+    const feedRequest = buildFeedLabelledRequest({
+      id: "feed:f1",
+      group: "feed:f1",
+      state: long,
+      rating: 0,
+    });
+    expect(feedRequest.state.length).toBe(BASAL_TRAIN_STATE_CHAR_CAP + 1);
+  });
+
   test("buildLabelledRequest uses the shared question and gold rating", () => {
     const r = buildLabelledRequest({
       id: "b1",

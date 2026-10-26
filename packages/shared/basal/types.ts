@@ -34,6 +34,8 @@ export const zBasalHealth = z.object({
   calibration_id: z.string().nullable(),
   engine_version: z.string(),
   error: z.string().optional(),
+  // True while the bridge has stopped basal-serve to run basal-calibrate.
+  calibrating: z.boolean().optional(),
   // Only set by the client when BASAL_MOCK is active, never by the bridge.
   mock: z.boolean().optional(),
 });
@@ -102,6 +104,8 @@ export const zBasalTrainReport = z.object({
   thresholds: z.record(z.string(), z.unknown()),
   fit: z.unknown().optional(),
   cert: z.unknown().optional(),
+  // Wall clock of basal-calibrate, reported by the bridge.
+  duration_s: z.number().optional(),
   raw: z.string().optional(),
 });
 export type BasalTrainReport = z.infer<typeof zBasalTrainReport>;

@@ -175,6 +175,7 @@ export const basalAppRouter = router({
         calibrationId: health.calibration_id,
         engineVersion: health.engine_version,
         baseUrl: client.baseUrl,
+        calibrating: health.calibrating === true,
         ...(bridgeError ? { error: bridgeError } : {}),
       },
       activeCalibration: activeCalibration

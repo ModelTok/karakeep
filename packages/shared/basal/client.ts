@@ -17,8 +17,22 @@ import {
 
 export const BASAL_DEFAULT_BRIDGE_URL = "http://host.docker.internal:8010";
 export const BASAL_HEALTH_TIMEOUT_MS = 10_000;
-export const BASAL_SCORE_TIMEOUT_MS = 180_000;
-export const BASAL_TRAIN_TIMEOUT_MS = 1_800_000;
+// Measured on this host (i7-7700, CPU only, basal-2.0-mini Q8_0 in gguf mode):
+// one decision over a short title-only state costs ~4 s, one decision over a
+// full state with the 12 000 character text cap costs 45-55 s. The bridge
+// answers /score by scoring the items of one request sequentially and the
+// router sends up to BASAL_SCORE_BATCH_SIZE (10) items per request, so the
+// per-request budget must cover batch_size * worst_case_decision. A 180 s
+// budget covers ~3 full-text decisions and made every real 10-item batch fail
+// with "no response within 180 s", so the budget is 10 x 90 s.
+export const BASAL_SCORE_PER_DECISION_TIMEOUT_MS = 90_000;
+export const BASAL_SCORE_TIMEOUT_MS = 900_000;
+// basal-calibrate re-runs every labelled request through the model before it
+// fits the temperatures, so a train request costs roughly the same as scoring
+// the same number of full-text states: ~50 s per decision on this host, i.e.
+// ~20 min for 23 labelled decisions and ~45-60 min once the ratings reach the
+// recommended 50. 1800 s capped that at ~36 decisions, so the budget is 60 min.
+export const BASAL_TRAIN_TIMEOUT_MS = 3_600_000;
 
 const BODY_EXCERPT_CHARS = 500;
 

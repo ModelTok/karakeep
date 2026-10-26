@@ -39,6 +39,20 @@ function capState(state: string): string {
     : state;
 }
 
+// Training states are deliberately shorter than scoring states: basal-calibrate
+// re-runs every labelled request through the model before it fits anything, so a
+// 12000 character state costs ~50 s per decision on the CPU-only host. The
+// header (title, domain, feed, tags, description/summary) carries most of the
+// signal, so a short excerpt is enough for fitting temperatures and thresholds.
+export const BASAL_TRAIN_STATE_CHAR_CAP = 2500;
+
+export function capTrainState(state: string): string {
+  if (state.length <= BASAL_TRAIN_STATE_CHAR_CAP) {
+    return state;
+  }
+  return `${state.slice(0, BASAL_TRAIN_STATE_CHAR_CAP)}…`;
+}
+
 /**
  * Builds the labelled text block the engine scores. The labels are Polish on
  * purpose: they are model input, not UI copy. Pure function.
@@ -81,7 +95,6 @@ export function buildBasalState(input: BasalStateInput): BasalState {
 
 // Number of most recent headlines included in a feed summary.
 export const BASAL_FEED_HEADLINE_COUNT = 10;
-
 // Value stored in the stateKind column for feed scores.
 export const BASAL_FEED_STATE_KIND = "feed_summary";
 
