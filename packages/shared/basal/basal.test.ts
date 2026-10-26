@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
+  BASAL_SCORE_PER_DECISION_TIMEOUT_MS,
+  BASAL_SCORE_TIMEOUT_MS,
   BasalBridgeError,
   BasalClient,
   BasalUnavailableError,
   mockProbabilities,
+  scoreTimeoutForBatch,
 } from "./client";
 import {
   buildDataset,
@@ -35,6 +38,17 @@ afterEach(() => {
 });
 
 describe("BasalClient errors", () => {
+  test("score budget grows with the batch and stays under the cap", () => {
+    // The bridge scores one /score request sequentially, so a 10-item batch
+    // needs 10 x the per-decision budget (the undici dispatcher uses it as
+    // its headers timeout, Node's global fetch would cap it at 300 s).
+    expect(scoreTimeoutForBatch(1)).toBe(BASAL_SCORE_PER_DECISION_TIMEOUT_MS);
+    expect(scoreTimeoutForBatch(10)).toBe(
+      10 * BASAL_SCORE_PER_DECISION_TIMEOUT_MS,
+    );
+    expect(scoreTimeoutForBatch(50)).toBe(BASAL_SCORE_TIMEOUT_MS);
+  });
+
   test("unreachable base URL -> BasalUnavailableError with URL", async () => {
     vi.stubEnv("BASAL_MOCK", "");
     // Port 9 on localhost is (almost) never listening; fetch fails to connect.

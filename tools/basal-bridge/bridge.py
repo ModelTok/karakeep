@@ -50,11 +50,47 @@ CALIBRATE_BIN = Path(
 )
 SERVE_HOST = os.environ.get("BASAL_SERVE_HOST", "127.0.0.1")
 SERVE_PORT = int(os.environ.get("BASAL_SERVE_PORT", "8011"))
-BIND_HOST = os.environ.get("BASAL_BRIDGE_HOST", "0.0.0.0")
 BIND_PORT = int(os.environ.get("BASAL_BRIDGE_PORT", "8010"))
-SCORE_TIMEOUT = float(os.environ.get("BASAL_SCORE_TIMEOUT", "180"))
+
+
+def _default_bind_host() -> str:
+    """The docker bridge gateway, never 0.0.0.0.
+
+    basal-bridge has no authentication, so its defaults must not expose it to
+    the LAN or Tailscale. Karakeep reaches it through host.docker.internal,
+    which resolves to this gateway inside the container.
+    """
+    try:
+        out = subprocess.run(
+            [
+                "docker",
+                "network",
+                "inspect",
+                os.environ.get("BASAL_DOCKER_NETWORK", "karakeep_default"),
+                "-f",
+                "{{(index .IPAM.Config 0).Gateway}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        gateway = out.stdout.strip()
+        if out.returncode == 0 and gateway:
+            return gateway
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "127.0.0.1"
+
+
+BIND_HOST = os.environ.get("BASAL_BRIDGE_HOST") or _default_bind_host()
+SCORE_TIMEOUT = float(os.environ.get("BASAL_SCORE_TIMEOUT", "600"))
 TRAIN_TIMEOUT = float(os.environ.get("BASAL_TRAIN_TIMEOUT", "3600"))
-SCORE_CONCURRENCY = int(os.environ.get("BASAL_SCORE_CONCURRENCY", "4"))
+# The engine is CPU bound and answers one request at a time, so scoring several
+# items concurrently only queues them inside basal-serve: with 4 workers and 5
+# full-text items (~50 s each) four of them hit SCORE_TIMEOUT while one
+# finished. Sequential scoring keeps one item's wait equal to one decision.
+SCORE_CONCURRENCY = int(os.environ.get("BASAL_SCORE_CONCURRENCY", "1"))
 START_TIMEOUT = float(os.environ.get("BASAL_START_TIMEOUT", "180"))
 TARGETS = os.environ.get("BASAL_TARGETS", "0.01,0.05")
 MIN_PER_TYPE = os.environ.get("BASAL_MIN_PER_TYPE", "50")

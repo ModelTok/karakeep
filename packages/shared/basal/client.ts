@@ -1,3 +1,4 @@
+import { Agent, fetch as undiciFetch } from "undici";
 import type { z } from "zod";
 
 import type {
@@ -17,21 +18,20 @@ import {
 
 export const BASAL_DEFAULT_BRIDGE_URL = "http://host.docker.internal:8010";
 export const BASAL_HEALTH_TIMEOUT_MS = 10_000;
+export const BASAL_CONNECT_TIMEOUT_MS = 10_000;
 // Measured on this host (i7-7700, CPU only, basal-2.0-mini Q8_0 in gguf mode):
 // one decision over a short title-only state costs ~4 s, one decision over a
 // full state with the 12 000 character text cap costs 45-55 s. The bridge
 // answers /score by scoring the items of one request sequentially and the
 // router sends up to BASAL_SCORE_BATCH_SIZE (10) items per request, so the
-// per-request budget must cover batch_size * worst_case_decision. A 180 s
-// budget covers ~3 full-text decisions and made every real 10-item batch fail
-// with "no response within 180 s", so the budget is 10 x 90 s.
+// per-request budget scales with the batch: 90 s per item, capped below.
 export const BASAL_SCORE_PER_DECISION_TIMEOUT_MS = 90_000;
 export const BASAL_SCORE_TIMEOUT_MS = 900_000;
 // basal-calibrate re-runs every labelled request through the model before it
 // fits the temperatures, so a train request costs roughly the same as scoring
-// the same number of full-text states: ~50 s per decision on this host, i.e.
-// ~20 min for 23 labelled decisions and ~45-60 min once the ratings reach the
-// recommended 50. 1800 s capped that at ~36 decisions, so the budget is 60 min.
+// the same number of states. Training states are capped at 2 500 characters,
+// which keeps one decision near 10-15 s on this host, so 60 min covers the
+// recommended ~85 ratings and leaves headroom.
 export const BASAL_TRAIN_TIMEOUT_MS = 3_600_000;
 
 const BODY_EXCERPT_CHARS = 500;
@@ -74,6 +74,16 @@ export function isBasalMockEnabled(): boolean {
   return value === "1" || value === "true";
 }
 
+/**
+ * One /score request carries a batch of items that the bridge scores
+ * sequentially, so the request budget has to grow with the batch size:
+ * 90 s per item, never above the overall cap.
+ */
+export function scoreTimeoutForBatch(itemCount: number): number {
+  const perItem = Math.max(1, itemCount) * BASAL_SCORE_PER_DECISION_TIMEOUT_MS;
+  return Math.min(BASAL_SCORE_TIMEOUT_MS, perItem);
+}
+
 // FNV-1a, 32 bit. Deterministic and dependency free.
 function hash32(input: string, seed = 0x811c9dc5): number {
   let h = seed >>> 0;
@@ -107,14 +117,16 @@ export function mockProbabilities(
 
 export class BasalClient {
   readonly baseUrl: string;
-  private readonly fetchImpl: typeof fetch;
+  private readonly fetchImpl: typeof fetch | undefined;
   private readonly mockOverride: boolean | undefined;
 
   constructor(opts: BasalClientOptions = {}) {
     const base =
       opts.baseUrl ?? process.env.BASAL_BRIDGE_URL ?? BASAL_DEFAULT_BRIDGE_URL;
     this.baseUrl = base.replace(/\/+$/, "");
-    this.fetchImpl = opts.fetchImpl ?? ((...args) => fetch(...args));
+    // Undefined means: use undici's fetch with a per-request dispatcher. A
+    // custom implementation (tests) is used as-is.
+    this.fetchImpl = opts.fetchImpl;
     this.mockOverride = opts.mock;
   }
 
@@ -180,7 +192,7 @@ export class BasalClient {
         ...(opts.question ? { question: opts.question } : {}),
         ...(opts.questionName ? { questionName: opts.questionName } : {}),
       },
-      BASAL_SCORE_TIMEOUT_MS,
+      scoreTimeoutForBatch(items.length),
       zBasalScoreResponse,
     );
   }
@@ -218,62 +230,95 @@ export class BasalClient {
     timeoutMs: number,
     schema: T,
   ): Promise<z.infer<T>> {
-    let response: Response;
-    try {
-      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        method,
-        headers:
-          body === undefined
-            ? undefined
-            : { "Content-Type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (e) {
-      const err = e as Error;
-      const reason =
-        err.name === "TimeoutError" || err.name === "AbortError"
-          ? `no response within ${Math.round(timeoutMs / 1000)} s`
-          : describeNetworkError(err);
-      throw new BasalUnavailableError(this.baseUrl, reason);
-    }
+    // Node's global fetch runs on undici with a fixed 300 s headers/body
+    // timeout that no option of `fetch` can raise: a 10-item batch of
+    // full-text states (~550 s) failed with UND_ERR_HEADERS_TIMEOUT long
+    // before BASAL_SCORE_TIMEOUT_MS, and /train takes minutes by design.
+    // So the bridge client uses undici's own fetch with a dispatcher whose
+    // timeouts match the request budget. A custom fetchImpl (tests) skips it.
+    const dispatcher = this.fetchImpl
+      ? undefined
+      : new Agent({
+          connectTimeout: BASAL_CONNECT_TIMEOUT_MS,
+          headersTimeout: timeoutMs,
+          bodyTimeout: timeoutMs,
+        });
+    const fetcher: typeof fetch = this.fetchImpl
+      ? this.fetchImpl
+      : (input, init) =>
+          undiciFetch(
+            input as string,
+            {
+              ...(init as Record<string, unknown>),
+              dispatcher,
+            } as Parameters<typeof undiciFetch>[1],
+          ) as unknown as Promise<Response>;
 
-    let text: string;
     try {
-      text = await response.text();
-    } catch (e) {
-      throw new BasalUnavailableError(
-        this.baseUrl,
-        `failed reading response: ${(e as Error).message}`,
-      );
-    }
+      let response: Response;
+      try {
+        response = await fetcher(`${this.baseUrl}${path}`, {
+          method,
+          headers:
+            body === undefined
+              ? undefined
+              : { "Content-Type": "application/json" },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (e) {
+        const err = e as Error;
+        const reason =
+          err.name === "TimeoutError" ||
+          err.name === "AbortError" ||
+          err.name === "HeadersTimeoutError" ||
+          err.name === "BodyTimeoutError"
+            ? `no response within ${Math.round(timeoutMs / 1000)} s`
+            : describeNetworkError(err);
+        throw new BasalUnavailableError(this.baseUrl, reason);
+      }
 
-    if (!response.ok) {
-      throw new BasalBridgeError(
-        response.status,
-        text.slice(0, BODY_EXCERPT_CHARS),
-      );
-    }
+      let text: string;
+      try {
+        text = await response.text();
+      } catch (e) {
+        throw new BasalUnavailableError(
+          this.baseUrl,
+          `failed reading response: ${(e as Error).message}`,
+        );
+      }
 
-    let json: unknown;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      throw new BasalBridgeError(
-        response.status,
-        text.slice(0, BODY_EXCERPT_CHARS),
-        `Basal bridge returned invalid JSON for ${path}`,
-      );
+      if (!response.ok) {
+        throw new BasalBridgeError(
+          response.status,
+          text.slice(0, BODY_EXCERPT_CHARS),
+        );
+      }
+
+      let json: unknown;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new BasalBridgeError(
+          response.status,
+          text.slice(0, BODY_EXCERPT_CHARS),
+          `Basal bridge returned invalid JSON for ${path}`,
+        );
+      }
+      const parsed = schema.safeParse(json);
+      if (!parsed.success) {
+        throw new BasalBridgeError(
+          response.status,
+          text.slice(0, BODY_EXCERPT_CHARS),
+          `Basal bridge returned an unexpected payload for ${path}: ${parsed.error.message}`,
+        );
+      }
+      return parsed.data;
+    } finally {
+      if (dispatcher) {
+        await dispatcher.close().catch(() => undefined);
+      }
     }
-    const parsed = schema.safeParse(json);
-    if (!parsed.success) {
-      throw new BasalBridgeError(
-        response.status,
-        text.slice(0, BODY_EXCERPT_CHARS),
-        `Basal bridge returned an unexpected payload for ${path}: ${parsed.error.message}`,
-      );
-    }
-    return parsed.data;
   }
 }
 
