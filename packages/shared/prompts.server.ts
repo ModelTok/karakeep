@@ -22,9 +22,19 @@ async function getEncodingInstance(): Promise<Tiktoken> {
   return encoding;
 }
 
+/**
+ * Encode text, counting special-token look-alikes such as "<|endoftext|>" as
+ * ordinary characters. By default the tokenizer throws on them, which failed
+ * every tagging and summary job for pages that merely mention such a token
+ * (articles about tokenizers, scraped training data) on every retry.
+ */
+function encodeText(enc: Tiktoken, text: string): number[] {
+  return enc.encode(text, [], []);
+}
+
 async function calculateNumTokens(text: string): Promise<number> {
   const enc = await getEncodingInstance();
-  return enc.encode(text).length;
+  return encodeText(enc, text).length;
 }
 
 async function truncateContent(
@@ -35,7 +45,7 @@ async function truncateContent(
   // Tokenizing is slow and blocks the event loop, so cut the content to a
   // generous upper bound of characters before encoding it.
   content = content.slice(0, length * 8);
-  const tokens = enc.encode(content);
+  const tokens = encodeText(enc, content);
   if (tokens.length <= length) {
     return content;
   }
