@@ -6,15 +6,25 @@ import { buildImpersonatingTRPCClient } from "trpc";
 import { withWorkerEventLog, withWorkerTracing } from "workerTracing";
 
 import {
+  orderByScore,
+  profileMode,
+  rankWithBasal,
+  selectPicks,
+} from "./utils/basalRanker";
+import {
   digestTitle,
   digestWindowStart,
   digestWordBudget,
   formatItemForPrompt,
+  getDomain,
   prepareDigestItems,
   renderDigest,
   shouldWriteBriefing,
   worthBriefing,
 } from "./utils/digestFormatter";
+
+import type { RankProfile, TasteEntry } from "./utils/basalRanker";
+import type { DigestItem } from "./utils/digestFormatter";
 
 import type { ZDigestRequest } from "@karakeep/shared-server";
 import { db } from "@karakeep/db";
@@ -128,12 +138,103 @@ export class DigestWorker {
       {
         concurrency: 1,
         pollIntervalMs: 5000,
-        timeoutSecs: 300,
+        // Ranking by taste (Basal) and then the briefing (a local model) can
+        // take several minutes together on modest hardware.
+        timeoutSecs: 900,
       },
     );
 
     return worker;
   }
+}
+
+/**
+ * What the reader has already told us about their taste: the articles they
+ * favourited (interested) and archived (not interested), newest first.
+ */
+async function loadTasteProfile(userId: string): Promise<RankProfile> {
+  const load = async (
+    flag: "favourited" | "archived",
+  ): Promise<TasteEntry[]> => {
+    const rows = await db
+      .select({
+        title: bookmarks.title,
+        crawledTitle: bookmarkLinks.title,
+        url: bookmarkLinks.url,
+      })
+      .from(bookmarks)
+      .innerJoin(bookmarkLinks, eq(bookmarks.id, bookmarkLinks.id))
+      .where(
+        and(
+          eq(bookmarks.userId, userId),
+          eq(bookmarks.type, BookmarkTypes.LINK),
+          eq(bookmarks[flag], true),
+        ),
+      )
+      .orderBy(desc(bookmarks.modifiedAt))
+      .limit(60);
+    return rows.map((r) => ({
+      title: r.title ?? r.crawledTitle ?? r.url,
+      domain: getDomain(r.url),
+    }));
+  };
+  return {
+    favourites: await load("favourited"),
+    archived: await load("archived"),
+  };
+}
+
+/**
+ * Scores the candidates by how well they fit the reader's taste, using the
+ * configured Basal server. Null (and a log line) when it is not configured, the
+ * reader has not favourited or archived anything yet, or the server fails: the
+ * digest then works exactly as it did without recommendations.
+ */
+async function recommend(
+  jobId: string,
+  userId: string,
+  candidates: DigestItem[],
+  abortSignal: AbortSignal,
+): Promise<Map<number, number> | null> {
+  const cfg = serverConfig.recommendations;
+  if (!cfg.basalUrl) {
+    return null;
+  }
+  const profile = await loadTasteProfile(userId);
+  const mode = profileMode(profile);
+  if (!mode) {
+    logger.info(
+      `[digest][${jobId}] No favourites or archived articles yet; skipping recommendations.`,
+    );
+    return null;
+  }
+  const started = Date.now();
+  const scores = await rankWithBasal(
+    {
+      url: cfg.basalUrl,
+      apiKey: cfg.basalApiKey,
+      timeoutMs: cfg.basalTimeoutSec * 1000,
+      chunk: cfg.basalChunk,
+    },
+    profile,
+    candidates,
+    {
+      signal: abortSignal,
+      onError: (message) =>
+        logger.warn(
+          `[digest][${jobId}] ${message}; the digest continues without recommendations.`,
+        ),
+    },
+  );
+  if (scores) {
+    const values = [...scores.values()].sort((a, b) => a - b);
+    logger.info(
+      `[digest][${jobId}] Basal ranked ${scores.size}/${candidates.length} articles in ${((Date.now() - started) / 1000).toFixed(1)}s ` +
+        `(${mode} mode: ${profile.favourites.length} favourites, ${profile.archived.length} archived; ` +
+        `scores ${values[0]?.toFixed(2)}..${values[values.length - 1]?.toFixed(2)}).`,
+    );
+  }
+  return scores;
 }
 
 async function buildDigestMarkdown(
@@ -146,6 +247,7 @@ async function buildDigestMarkdown(
     summary: string | null;
     description: string | null;
     url: string;
+    archived: boolean;
   }[],
   abortSignal: AbortSignal,
 ): Promise<string> {
@@ -193,12 +295,34 @@ async function buildDigestMarkdown(
     return renderDigest(null, items);
   }
 
+  // With a taste profile and a Basal server, the best-fitting articles are the
+  // ones the briefing model reads and the ones listed first. Articles the
+  // reader already archived are not recommended back to them.
+  const archivedUrls = new Set(
+    rows.filter((r) => r.archived).map((r) => r.url),
+  );
+  const rankable = briefable.filter((i) => !archivedUrls.has(i.url));
+  const scores = await recommend(jobId, userId, rankable, abortSignal);
+  const picks = scores
+    ? selectPicks(
+        rankable,
+        scores,
+        // Picking most of a short list says nothing.
+        Math.min(
+          serverConfig.recommendations.digestPicks,
+          Math.floor(rankable.length / 2),
+        ),
+      )
+    : [];
+  const ranked = scores ? orderByScore(briefable, scores) : briefable;
+  const listed = scores ? orderByScore(items, scores) : items;
+
   const inferenceClient = InferenceClientFactory.build();
   if (!inferenceClient) {
     logger.info(
       `[digest][${jobId}] No inference provider configured; using the plain digest.`,
     );
-    return renderDigest(null, items);
+    return renderDigest(null, listed, undefined, picks);
   }
 
   const userSettings = await db.query.users.findFirst({
@@ -209,7 +333,7 @@ async function buildDigestMarkdown(
   const maxWords = digestWordBudget(briefable.length);
   const { prompt, includedCount } = await buildDigestPrompt(
     userSettings?.inferredTagLang ?? serverConfig.inference.inferredTagLang,
-    briefable.map(formatItemForPrompt),
+    ranked.map(formatItemForPrompt),
     maxWords,
     serverConfig.inference.contextLength,
   );
@@ -220,9 +344,9 @@ async function buildDigestMarkdown(
       abortSignal,
     });
     logger.info(
-      `[digest][${jobId}] Edited ${includedCount}/${briefable.length} items (${items.length} saved) using ${result.totalTokens} tokens.`,
+      `[digest][${jobId}] Edited ${includedCount}/${briefable.length} items (${items.length} saved${scores ? `, ${picks.length} picked` : ""}) using ${result.totalTokens} tokens.`,
     );
-    return renderDigest(result.response, items, maxWords);
+    return renderDigest(result.response, listed, maxWords, picks);
   } catch (error) {
     if (abortSignal.aborted) {
       throw error;
@@ -231,7 +355,7 @@ async function buildDigestMarkdown(
     logger.warn(
       `[digest][${jobId}] Inference failed, using the plain digest: ${error}`,
     );
-    return renderDigest(null, items);
+    return renderDigest(null, listed, undefined, picks);
   }
 }
 
@@ -261,6 +385,7 @@ async function run(req: DequeuedJob<ZDigestRequest>) {
       summary: bookmarks.summary,
       description: bookmarkLinks.description,
       url: bookmarkLinks.url,
+      archived: bookmarks.archived,
     })
     .from(bookmarks)
     .innerJoin(bookmarkLinks, eq(bookmarks.id, bookmarkLinks.id))

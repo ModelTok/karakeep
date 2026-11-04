@@ -43,6 +43,10 @@ services:
       TRANSCRIPTION_API_URL: http://whisper-asr:9000
     volumes:
       - data:/data
+    # Lets the digest reach a Basal server running natively on the host (BASAL_URL=http://host.docker.internal:8000,
+    # see basal-gpu/README.md). Docker Desktop already provides this name; on Linux it is needed.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "3000:3000"          # optional: LAN access / first-run testing. Safe to remove —
                              # cloudflared reaches the app internally at web:3000.

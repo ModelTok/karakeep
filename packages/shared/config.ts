@@ -79,6 +79,12 @@ const allEnv = z.object({
   OLLAMA_BASE_URL: z.string().url().optional(),
   OLLAMA_KEEP_ALIVE: z.string().optional(),
   OLLAMA_THINK: z.enum(["true", "false"]).optional(),
+  // Recommendations: rank the daily digest by the reader's taste with a Basal server.
+  BASAL_URL: z.string().url().optional(),
+  BASAL_API_KEY: z.string().optional(),
+  BASAL_TIMEOUT_SEC: z.coerce.number().positive().default(300),
+  BASAL_CHUNK: z.coerce.number().int().positive().default(40),
+  DIGEST_PICKS: z.coerce.number().int().min(0).max(50).default(10),
   CHAT_ENABLED: stringBool("false"),
   CHAT_MODEL: z.string().optional(),
   SEMANTIC_SEARCH_ENABLED: stringBool("true"),
@@ -396,6 +402,13 @@ const serverConfigSchema = allEnv.transform((val, ctx) => {
     },
     chat: {
       enabled: val.CHAT_ENABLED,
+    },
+    recommendations: {
+      basalUrl: val.BASAL_URL,
+      basalApiKey: val.BASAL_API_KEY,
+      basalTimeoutSec: val.BASAL_TIMEOUT_SEC,
+      basalChunk: val.BASAL_CHUNK,
+      digestPicks: val.DIGEST_PICKS,
     },
     experimentalFeatures: {
       semanticSearch: val.SEMANTIC_SEARCH_ENABLED,

@@ -83,6 +83,89 @@ describe("formatItemForPrompt", () => {
   });
 });
 
+describe("renderDigest with recommendation picks", () => {
+  const items = prepareDigestItems([
+    row("Alpha", "https://a.com/1", "Alpha summary."),
+    row("Beta", "https://b.com/2", "Beta summary."),
+    row("Gamma", "https://c.com/3", "Gamma summary."),
+    row("Delta", "https://d.com/4", "Delta summary."),
+    row("Epsilon", "https://e.com/5", "Epsilon summary."),
+  ]);
+  const briefing = [
+    "A solid overview of the week [#1] and what matters in it.",
+    "",
+    "## Things",
+    "Beta matters here [#2].",
+  ].join("\n");
+
+  test("puts the picks between the briefing and Also saved, and lists them once", () => {
+    const out = renderDigest(briefing, items, undefined, [items[3], items[2]]);
+    const picked = out.indexOf("## Picked for you");
+    const also = out.indexOf("## Also saved");
+    expect(picked).toBeGreaterThan(out.indexOf("## Things"));
+    expect(also).toBeGreaterThan(picked);
+    expect(out).toContain(
+      "## Picked for you\n\n- [Delta](https://d.com/4) (d.com)\n- [Gamma](https://c.com/3) (c.com)",
+    );
+    // Delta and Gamma were uncited, but being picked they are not repeated under Also saved.
+    expect(out.slice(also)).not.toContain("Delta");
+    expect(out.slice(also)).not.toContain("Gamma");
+    expect(out.slice(also)).toContain("Epsilon");
+  });
+
+  test("no Also saved section is left when every article is cited or picked", () => {
+    const out = renderDigest(briefing, items, undefined, [
+      items[2],
+      items[3],
+      items[4],
+    ]);
+    expect(out).toContain("## Picked for you");
+    expect(out).not.toContain("## Also saved");
+  });
+
+  test("keeps a pick that the briefing also cites", () => {
+    const out = renderDigest(briefing, items, undefined, [items[1]]);
+    expect(out).toContain(
+      "## Picked for you\n\n- [Beta](https://b.com/2) (b.com)",
+    );
+    expect(out).toContain("(b.com)"); // the briefing's inline citation is untouched
+  });
+
+  test("changes nothing when there are no picks", () => {
+    expect(renderDigest(briefing, items, undefined, [])).toBe(
+      renderDigest(briefing, items),
+    );
+    expect(renderDigest(briefing, items)).not.toContain("Picked for you");
+  });
+
+  test("the plain digest leads with the picks, with their notes, and does not repeat them", () => {
+    const out = renderDigest(null, items, undefined, [items[2], items[0]]);
+    expect(out).toContain("5 links saved since the last digest.");
+    expect(out).toContain(
+      "## Picked for you\n\n- [Gamma](https://c.com/3) (c.com) — Gamma summary.\n- [Alpha](https://a.com/1) (a.com) — Alpha summary.",
+    );
+    const rest = out.slice(out.indexOf("## Also saved"));
+    expect(rest).toContain("Beta");
+    expect(rest).toContain("Delta");
+    expect(rest).not.toContain("Gamma");
+    expect(rest).not.toContain("Alpha");
+  });
+
+  test("the plain digest does not print a failed page's error note among the picks", () => {
+    const withFailed = prepareDigestItems([
+      row("Good", "https://a.com/1", "A real note."),
+      row(
+        "Broken",
+        "https://b.com/2",
+        "This page is experiencing technical difficulties and cannot be loaded.",
+      ),
+    ]);
+    const out = renderDigest(null, withFailed, undefined, [withFailed[1]]);
+    expect(out).toContain("[Broken](https://b.com/2)");
+    expect(out).not.toContain("technical difficulties");
+  });
+});
+
 describe("digestWindowStart", () => {
   const now = new Date("2026-10-22T06:05:00Z");
   const hours = (h: number) => new Date(now.getTime() - h * 60 * 60 * 1000);
