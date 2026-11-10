@@ -1,25 +1,23 @@
-# Basal GPU server supervisor (native Windows, no Docker).
+# Basal server supervisor (native Windows, CPU, no Docker).
 #
 # Keeps two local servers running for Karakeep's recommendation engine:
-#   llama-server (llama.cpp, Vulkan build)  127.0.0.1:8080   runs the Basal model on the GPU
-#   basal-serve  (Basal 2.5.x)              127.0.0.1:8000   the typed-decision API Karakeep talks to
+#   llama-server (llama.cpp, CPU build)  127.0.0.1:8080   runs the Basal model
+#   basal-serve  (Basal 2.5.x)           127.0.0.1:8000   the typed-decision API Karakeep talks to
 # Both listen on loopback only. Karakeep (in Docker) reaches basal-serve through host.docker.internal:8000,
 # with an API key (api-keys.json holds only its SHA-256).
 #
-# Run by the scheduled task "Karakeep Basal GPU server" at logon and every 5 minutes. Idempotent: healthy servers
-# are left alone; a dead one is started; if the GPU server will not come up, the CPU is used instead.
+# Run by the scheduled task "Karakeep Basal server" at logon and every 5 minutes. Idempotent: healthy servers
+# are left alone and a dead one is started.
 #
 #   .\supervisor.ps1              check, and start whatever is not healthy
 #   .\supervisor.ps1 -Restart     restart both
 #   .\supervisor.ps1 -Stop        stop both
-#   .\supervisor.ps1 -Cpu         use the CPU (llama.cpp -ngl 0) instead of the GPU
 #   .\supervisor.ps1 -DryRun      log what would be done, change nothing
-# Pause the automatic checks:  Disable-ScheduledTask -TaskName 'Karakeep Basal GPU server'
+# Pause the automatic checks:  Disable-ScheduledTask -TaskName 'Karakeep Basal server'
 
 param(
     [switch]$Restart,
     [switch]$Stop,
-    [switch]$Cpu,
     [switch]$DryRun
 )
 
@@ -35,6 +33,9 @@ $keysFile = Join-Path $base 'api-keys.json'
 $llamaUrl = 'http://127.0.0.1:8080'
 $basalUrl = 'http://127.0.0.1:8000'
 $startTimeoutSec = 120
+# Two thirds of the logical processors, leaving the rest for the machine. Measured on a 12-core / 24-thread PC for
+# 52 articles: 8 threads 95 s, 12 threads 69 s, 16 threads 64 s.
+$threads = [Math]::Max(1, [int][Math]::Round([Environment]::ProcessorCount * 2 / 3))
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
@@ -69,16 +70,13 @@ function Wait-Healthy([string]$url) {
     return $false
 }
 
-function Start-Llama([bool]$gpu) {
-    $mode = if ($gpu) { 'GPU (Vulkan)' } else { 'CPU' }
-    if ($DryRun) { Write-Log "would start llama-server on the $mode"; return $true }
-    $layers = if ($gpu) { '99' } else { '0' }
-    $threads = if ($gpu) { '4' } else { '8' }
+function Start-Llama {
+    if ($DryRun) { Write-Log 'would start llama-server'; return $true }
     Start-Process -FilePath $llamaExe -WindowStyle Hidden `
-        -ArgumentList @('-m', $gguf, '-c', '8192', '-ngl', $layers, '--host', '127.0.0.1', '--port', '8080', '-np', '1', '--threads', $threads) `
+        -ArgumentList @('-m', $gguf, '-c', '8192', '--host', '127.0.0.1', '--port', '8080', '-np', '1', '--threads', $threads) `
         -RedirectStandardOutput (Join-Path $logDir 'llama-out.log') -RedirectStandardError (Join-Path $logDir 'llama-err.log') | Out-Null
     $ok = Wait-Healthy $llamaUrl
-    Write-Log ("llama-server on the {0}: {1}" -f $mode, $(if ($ok) { 'healthy' } else { "NOT healthy after ${startTimeoutSec}s" }))
+    Write-Log ("llama-server (CPU, {0} threads): {1}" -f $threads, $(if ($ok) { 'healthy' } else { "NOT healthy after ${startTimeoutSec}s" }))
     return $ok
 }
 
@@ -111,13 +109,7 @@ try {
 
     if (-not $llamaOk) {
         Stop-Llama
-        $started = Start-Llama (-not $Cpu)
-        if (-not $started -and -not $Cpu) {
-            Write-Log 'the GPU server did not come up; falling back to the CPU'
-            Stop-Llama
-            $started = Start-Llama $false
-        }
-        if (-not $started) { Write-Log 'llama-server could not be started'; exit 1 }
+        if (-not (Start-Llama)) { Write-Log 'llama-server could not be started'; exit 1 }
     }
     if (-not $basalOk) {
         Stop-Basal

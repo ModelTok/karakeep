@@ -44,7 +44,7 @@ services:
     volumes:
       - data:/data
     # Lets the digest reach a Basal server running natively on the host (BASAL_URL=http://host.docker.internal:8000,
-    # see basal-gpu/README.md). Docker Desktop already provides this name; on Linux it is needed.
+    # see basal-local/README.md). Docker Desktop already provides this name; on Linux it is needed.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

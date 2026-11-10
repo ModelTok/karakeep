@@ -1,23 +1,21 @@
 # Installs the native (no Docker) Basal server that Karakeep's recommendation engine talks to, and keeps it running.
 #
 #   .\setup.ps1                      install or repair, register the scheduled task, start the servers
-#   .\setup.ps1 -Cpu                 same, but run the model on the CPU instead of the GPU
 #   .\setup.ps1 -NoTask              do not register the scheduled task
-#   .\setup.ps1 -BaseDir D:\basal    install somewhere else (default: %USERPROFILE%\basal-gpu)
+#   .\setup.ps1 -BaseDir D:\basal    install somewhere else (default: %USERPROFILE%\basal-local)
 #
 # Safe to run again: anything already installed is verified (checksums) and left alone, an existing API key is kept.
 # What it installs (all under BaseDir, nothing system-wide, no administrator rights needed):
-#   - llama.cpp, Windows Vulkan build (pinned release, SHA-256 checked)         llama.cpp\
+#   - llama.cpp, Windows CPU build (pinned release, SHA-256 checked)            llama.cpp\
 #   - the basal-2.0-mini Q8_0 GGUF model from Hugging Face (SHA-256 checked)    models\basal-2.0-mini-GGUF\
 #   - a Python 3.12 environment with Basal 2.5.3 and CPU PyTorch (via uv)       venv\
 #   - api-keys.json (only a SHA-256 digest) and, in deploy\.env, the matching BASAL_API_KEY
-#   - supervisor.ps1 and the scheduled task "Karakeep Basal GPU server" (at logon and every 5 minutes)
-# Requires: Windows 10/11 x64, uv (winget install astral-sh.uv), an AMD/Intel/NVIDIA GPU driver with Vulkan for GPU mode.
+#   - supervisor.ps1 and the scheduled task "Karakeep Basal server" (at logon and every 5 minutes)
+# Requires: Windows 10/11 x64 and uv (winget install astral-sh.uv). No GPU needed.
 
 param(
-    [string]$BaseDir = (Join-Path $env:USERPROFILE 'basal-gpu'),
+    [string]$BaseDir = (Join-Path $env:USERPROFILE 'basal-local'),
     [string]$EnvFile = (Join-Path (Split-Path -Parent $PSScriptRoot) '.env'),
-    [switch]$Cpu,
     [switch]$NoTask
 )
 
@@ -26,8 +24,8 @@ $ProgressPreference = 'SilentlyContinue'
 
 # Pinned, verified artefacts. If a download no longer matches, the script stops rather than run unknown code.
 $llamaTag = 'b12109'
-$llamaZip = "llama-$llamaTag-bin-win-vulkan-x64.zip"
-$llamaSha = 'ed1d85207f58a292b5e9b9b529ecd4439bb8a60c5460dab0c137ef94d4322f2a'
+$llamaZip = "llama-$llamaTag-bin-win-cpu-x64.zip"
+$llamaSha = '3486d0092a14dfec4ceae090649cfff4930c73242f01f318aac508b92de58e5d'
 $modelRepo = 'Remek/basal-2.0-mini-GGUF'
 $modelFile = 'basal-2.0-mini-Q8_0.gguf'
 $modelSha = '4a0be62273fa1fbab6e680f94a6144ad339f4a35620e14fa653d7491a2a7e28e'
@@ -47,8 +45,8 @@ $venvDir = Join-Path $BaseDir 'venv'
 $venvPy = Join-Path $venvDir 'Scripts\python.exe'
 New-Item -ItemType Directory -Force -Path $BaseDir, $llamaDir, $modelDir, (Join-Path $BaseDir 'logs') | Out-Null
 
-# 1. llama.cpp (Vulkan)
-Step "llama.cpp $llamaTag (Vulkan build)"
+# 1. llama.cpp (CPU build)
+Step "llama.cpp $llamaTag (CPU build)"
 if (Test-Path (Join-Path $llamaDir 'llama-server.exe')) {
     Write-Host '    already installed'
 } else {
@@ -82,9 +80,17 @@ if (Test-Path (Join-Path $venvDir 'Scripts\basal-serve.exe')) {
 } else {
     $uv = Get-Command uv -ErrorAction SilentlyContinue
     if (-not $uv) { throw 'uv is required: winget install astral-sh.uv' }
-    & $uv.Source venv --python 3.12 $venvDir
-    & $uv.Source pip install --python $venvPy torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
-    & $uv.Source pip install --python $venvPy "basal @ $basalTar"
+    # uv reports progress on stderr, which Windows PowerShell 5.1 turns into a terminating error under 'Stop':
+    # relax that for the uv calls and check their exit codes instead.
+    function Invoke-Uv {
+        $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { & $uv.Source @args 2>&1 | ForEach-Object { "    $_" } | Write-Host } finally { $ErrorActionPreference = $prev }
+        if ($LASTEXITCODE -ne 0) { throw "uv $($args -join ' ') failed (exit code $LASTEXITCODE)" }
+    }
+    if (Test-Path $venvDir) { Remove-Item $venvDir -Recurse -Force }   # an earlier attempt that did not finish
+    Invoke-Uv venv --python 3.12 $venvDir
+    Invoke-Uv pip install --python $venvPy torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+    Invoke-Uv pip install --python $venvPy "basal @ $basalTar"
     if (-not (Test-Path (Join-Path $venvDir 'Scripts\basal-serve.exe'))) { throw 'Basal did not install' }
     Write-Host '    installed'
 }
@@ -107,7 +113,7 @@ if ($envSecret -and (Test-Path $keysFile) -and ((Get-Content $keysFile -Raw | Co
         $bytes = New-Object byte[] 32
         [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
         $secret = ([BitConverter]::ToString($bytes) -replace '-', '').ToLower()
-        $block = "`r`n# --- Recommendations (see deploy/basal-gpu/README.md) ---`r`nBASAL_URL=http://host.docker.internal:8000`r`nBASAL_API_KEY=$secret`r`n"
+        $block = "`r`n# --- Recommendations (see deploy/basal-local/README.md) ---`r`nBASAL_URL=http://host.docker.internal:8000`r`nBASAL_API_KEY=$secret`r`n"
         [IO.File]::AppendAllText($EnvFile, $block)
     }
     $json = '{"keys": [{"name": "karakeep", "sha256": "' + (Digest $secret) + '", "admin": false}]}'
@@ -119,8 +125,8 @@ if ($envSecret -and (Test-Path $keysFile) -and ((Get-Content $keysFile -Raw | Co
 Step 'supervisor and scheduled task'
 Copy-Item (Join-Path $PSScriptRoot 'supervisor.ps1') (Join-Path $BaseDir 'supervisor.ps1') -Force
 if (-not $NoTask) {
-    $name = 'Karakeep Basal GPU server'
-    $arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$(Join-Path $BaseDir 'supervisor.ps1')`"" + $(if ($Cpu) { ' -Cpu' } else { '' })
+    $name = 'Karakeep Basal server'
+    $arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$(Join-Path $BaseDir 'supervisor.ps1')`""
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
     $triggers = @(
         (New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"),
@@ -129,7 +135,7 @@ if (-not $NoTask) {
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $name -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Force `
-        -Description "Keeps Karakeep's local Basal servers (llama.cpp on the GPU + basal-serve) running. Script and log: $BaseDir. Pause with Disable-ScheduledTask." | Out-Null
+        -Description "Keeps Karakeep's local Basal servers (llama.cpp + basal-serve, on the CPU) running. Script and log: $BaseDir. Pause with Disable-ScheduledTask." | Out-Null
     Write-Host "    registered '$name' (at logon, then every 5 minutes)"
 } else {
     Write-Host '    task not registered (-NoTask)'
@@ -137,7 +143,7 @@ if (-not $NoTask) {
 
 # 6. start now
 Step 'starting the servers'
-& (Join-Path $BaseDir 'supervisor.ps1') @(if ($Cpu) { '-Cpu' })
+& (Join-Path $BaseDir 'supervisor.ps1')
 $ok = $false
 try { $ok = ((Invoke-WebRequest 'http://127.0.0.1:8000/health' -UseBasicParsing -TimeoutSec 10).StatusCode -eq 200) } catch { }
 if ($ok) { Write-Host '    basal-serve is healthy on 127.0.0.1:8000' -ForegroundColor Green } else { Write-Host "    not healthy: see $BaseDir\logs" -ForegroundColor Red; exit 1 }
