@@ -88,7 +88,7 @@ export function digestTitle(name: string, start: Date, end: Date): string {
     : `${name} — ${from} to ${to}`;
 }
 
-function getDomain(url: string): string {
+export function getDomain(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
   } catch {
@@ -371,23 +371,41 @@ function alsoSaved(items: DigestItem[]): string {
   return `## Also saved\n\n${shown.join("\n")}`;
 }
 
-function plainFallback(items: DigestItem[]): string {
-  const highlights = items.slice(0, FALLBACK_HIGHLIGHTS);
-  const lines = highlights.map((item) => {
-    const summary = isFailedCrawlNote(item.summary)
-      ? null
-      : condense(item.summary, SUMMARY_CHARS_FALLBACK);
-    return `- ${link(item.title, item.url)}${summary ? ` — ${summary}` : ""}`;
-  });
-  const parts = [
-    `${items.length} ${items.length === 1 ? "link" : "links"} saved since the last digest.`,
-    lines.join("\n"),
-  ];
-  const rest = alsoSaved(items.slice(FALLBACK_HIGHLIGHTS));
-  if (rest) {
-    parts.push(rest);
+/** A one-line entry, with a short note unless the page never loaded. */
+function noteLine(item: DigestItem, withDomain: boolean): string {
+  const summary = isFailedCrawlNote(item.summary)
+    ? null
+    : condense(item.summary, SUMMARY_CHARS_FALLBACK);
+  return `- ${link(item.title, item.url)}${withDomain ? ` (${item.domain})` : ""}${summary ? ` — ${summary}` : ""}`;
+}
+
+/** The articles the recommendation engine thinks fit the reader best. */
+function pickedForYou(picks: DigestItem[], withNotes: boolean): string {
+  if (picks.length === 0) {
+    return "";
   }
-  return parts.join("\n\n");
+  const lines = picks.map((i) =>
+    withNotes ? noteLine(i, true) : `- ${link(i.title, i.url)} (${i.domain})`,
+  );
+  return `## Picked for you\n\n${lines.join("\n")}`;
+}
+
+function plainFallback(items: DigestItem[], picks: DigestItem[] = []): string {
+  const pickIds = new Set(picks.map((p) => p.id));
+  const others = items.filter((i) => !pickIds.has(i.id));
+  const header = `${items.length} ${items.length === 1 ? "link" : "links"} saved since the last digest.`;
+  // With picks, they lead; without, the first few articles do, as before.
+  const lead =
+    picks.length > 0
+      ? pickedForYou(picks, true)
+      : others
+          .slice(0, FALLBACK_HIGHLIGHTS)
+          .map((i) => noteLine(i, false))
+          .join("\n");
+  const rest = alsoSaved(
+    picks.length > 0 ? others : others.slice(FALLBACK_HIGHLIGHTS),
+  );
+  return [header, lead, rest].filter(Boolean).join("\n\n");
 }
 
 /**
@@ -400,9 +418,10 @@ export function renderDigest(
   modelOutput: string | null,
   items: DigestItem[],
   maxWords?: number,
+  picks: DigestItem[] = [],
 ): string {
   if (!modelOutput) {
-    return plainFallback(items);
+    return plainFallback(items, picks);
   }
 
   const byId = new Map(items.map((i) => [i.id, i]));
@@ -411,13 +430,13 @@ export function renderDigest(
   // A model that blows well past the word limit has usually ignored the brief
   // and started enumerating, or it hit the output cap mid-sentence.
   if (maxWords !== undefined && wordCount(text) > maxWords * 2) {
-    return plainFallback(items);
+    return plainFallback(items, picks);
   }
   // Mostly invented ids means the model is not describing these items.
   const ids = [...text.matchAll(/\[#(\d+)\]/g)].map((m) => Number(m[1]));
   const invented = ids.filter((id) => !byId.has(id)).length;
   if (invented > ids.length - invented) {
-    return plainFallback(items);
+    return plainFallback(items, picks);
   }
 
   const cited = new Set<number>();
@@ -425,10 +444,13 @@ export function renderDigest(
 
   // No usable citations means the model ignored the format; don't ship it.
   if (cited.size === 0 || body.length < 40) {
-    return plainFallback(items);
+    return plainFallback(items, picks);
   }
 
-  const uncited = items.filter((i) => !cited.has(i.id));
-  const rest = alsoSaved(uncited);
-  return rest ? `${body}\n\n${rest}` : body;
+  // Picked articles get their own section, so they are not repeated below.
+  const pickIds = new Set(picks.map((p) => p.id));
+  const uncited = items.filter((i) => !cited.has(i.id) && !pickIds.has(i.id));
+  return [body, pickedForYou(picks, false), alsoSaved(uncited)]
+    .filter(Boolean)
+    .join("\n\n");
 }
