@@ -40,6 +40,7 @@ import {
   BrowserContextOptions,
   Page,
 } from "patchright";
+import { buildImpersonatingTRPCClient } from "trpc";
 import {
   abortRace,
   abortRaceResolve,
@@ -101,6 +102,8 @@ import { WebhooksService } from "@karakeep/trpc/models/webhooks.service";
 
 import type { ParseSubprocessOutput } from "./utils/parseHtmlSubprocessIpc";
 import {
+  DEAD_FEED_PAGE_RETRY_MS,
+  deadFeedPageAction,
   normalizeContentType,
   redactUrlCredentials,
   shouldRetryCrawlStatusCode,
@@ -355,6 +358,7 @@ async function runCrawler(
   const {
     url,
     userId,
+    source,
     createdAt,
     crawledAt,
     screenshotAssetId: oldScreenshotAssetId,
@@ -472,7 +476,13 @@ async function runCrawler(
       forceStorePdf: storePdf ?? false,
       numRetriesLeft,
       probeMetadataPromise,
+      source,
+      createdAt,
     });
+    if (!page) {
+      // The page is gone and the bookmark has been discarded; nothing is left to enqueue.
+      return { status: "completed" };
+    }
 
     await enqueuePostCrawlJobs(ctx, job);
 
@@ -902,19 +912,23 @@ interface CrawlAndParseUrlArgs {
   forceStorePdf: boolean;
   numRetriesLeft: number;
   probeMetadataPromise: Promise<ParseSubprocessOutput["metadata"] | null>;
+  /** Where the bookmark came from ("rss", "web", ...). */
+  source: string | null;
+  createdAt: Date;
 }
 
 /**
  * Crawls the url, parses it, and persists the bookmark's metadata, content,
  * and assets. Returns the rendered page's html and final url, which the
- * full-page archival (run later by the caller) works from.
+ * full-page archival (run later by the caller) works from, or null when the
+ * page turned out not to exist and the bookmark was discarded.
  */
 const crawlAndParseUrl = traced(
   "crawlAndParseUrl",
   async (
     ctx: CrawlContext,
     args: CrawlAndParseUrlArgs,
-  ): Promise<{ htmlContent: string; url: string }> => {
+  ): Promise<{ htmlContent: string; url: string } | null> => {
     const { url, userId, jobId, bookmarkId, abortSignal, runProxy, log } = ctx;
     const {
       oldAssets,
@@ -922,6 +936,8 @@ const crawlAndParseUrl = traced(
       forceStorePdf,
       numRetriesLeft,
       probeMetadataPromise,
+      source,
+      createdAt,
     } = args;
     const sanitizedProxyUrl = redactUrlCredentials(
       runProxy.httpsProxy ?? runProxy.httpProxy ?? "",
@@ -990,6 +1006,30 @@ const crawlAndParseUrl = traced(
       log.info(
         `Received status code ${statusCode} on latest retry attempt. Proceeding without retry.`,
       );
+    }
+
+    // An article from an RSS feed whose page does not exist is not worth keeping.
+    const deadPage = deadFeedPageAction({
+      source,
+      statusCode,
+      ageMs: Date.now() - createdAt.getTime(),
+    });
+    if (deadPage === "retry-later") {
+      log.info(
+        `Status code ${statusCode} for a fresh RSS article; will look again in ${DEAD_FEED_PAGE_RETRY_MS / 60000} minutes in case the page is not live yet.`,
+      );
+      throw new QueueRetryAfterError(
+        `RSS article not found yet (status ${statusCode})`,
+        DEAD_FEED_PAGE_RETRY_MS,
+      );
+    }
+    if (deadPage === "discard") {
+      log.info(
+        `Status code ${statusCode}: the RSS article no longer exists. Deleting the bookmark.`,
+      );
+      const trpcClient = await buildImpersonatingTRPCClient(userId);
+      await trpcClient.bookmarks.deleteBookmark({ bookmarkId });
+      return null;
     }
 
     const {

@@ -34,6 +34,34 @@ export function normalizeContentType(header: string | null): string | null {
   return header.split(";", 1)[0]!.trim().toLowerCase();
 }
 
+/** How long a feed entry's page may keep answering "not found" before it is given up on. */
+export const DEAD_FEED_PAGE_GRACE_MS = 60 * 60 * 1000;
+/** How long to wait before looking again while the page is still inside the grace period. */
+export const DEAD_FEED_PAGE_RETRY_MS = 15 * 60 * 1000;
+
+/**
+ * What to do with a freshly crawled page that says "not found" or "gone".
+ *
+ * Only articles that arrived from an RSS feed are ever discarded: the user did
+ * not pick them one by one, and the feed has since withdrawn them (or the feed
+ * links to a page that never existed), so keeping a bookmark of an error page
+ * is just noise. A feed sometimes lists an entry a little before its page is
+ * live, so a young bookmark is looked at again later instead.
+ */
+export function deadFeedPageAction(opts: {
+  source: string | null;
+  statusCode: number | null;
+  ageMs: number;
+}): "keep" | "retry-later" | "discard" {
+  if (opts.source !== "rss") {
+    return "keep";
+  }
+  if (opts.statusCode !== 404 && opts.statusCode !== 410) {
+    return "keep";
+  }
+  return opts.ageMs < DEAD_FEED_PAGE_GRACE_MS ? "retry-later" : "discard";
+}
+
 export function shouldRetryCrawlStatusCode(statusCode: number | null): boolean {
   if (statusCode === null) {
     return false;
