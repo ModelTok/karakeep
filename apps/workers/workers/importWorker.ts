@@ -29,6 +29,7 @@ import { ImportSessionsService } from "@karakeep/trpc/models/importSessions.serv
 
 import { registry } from "../metrics";
 import { buildImpersonatingTRPCClient } from "../trpc";
+import { cleanImportTags } from "./utils/importTags";
 
 // Prometheus metrics
 const importStagingProcessedCounter = new Counter({
@@ -453,10 +454,11 @@ export class ImportWorker {
       const result = await caller.bookmarks.createBookmark(bookmarkRequest);
 
       // Apply tags via existing mutation (for both new and duplicate bookmarks)
-      if (staged.tags && staged.tags.length > 0) {
+      const tags = cleanImportTags(staged.tags);
+      if (tags.length > 0) {
         await caller.bookmarks.updateTags({
           bookmarkId: result.id,
-          attach: staged.tags.map((t) => ({ tagName: t })),
+          attach: tags.map((t) => ({ tagName: t })),
           detach: [],
         });
       }
