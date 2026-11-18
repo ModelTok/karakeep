@@ -112,6 +112,10 @@ export const BackupSchedulingWorker = cron.schedule(
   {
     runOnInit: false,
     scheduled: false,
+    // node-cron only fires if a once-a-second check lands inside the 00:00:00 second;
+    // without this a late check silently drops the whole day. The per-user-per-day
+    // idempotency key below makes a late (or repeated) run harmless.
+    recoverMissedExecutions: true,
   },
 );
 

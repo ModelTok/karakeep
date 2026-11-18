@@ -1,0 +1,1 @@
+ALTER TABLE `user` ADD `digestLanguage` text;

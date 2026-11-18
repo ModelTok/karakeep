@@ -213,6 +213,7 @@ export const zUserSettingsSchema = z.object({
   backupsFrequency: z.enum(["daily", "weekly"]),
   backupsRetentionDays: z.number().int().min(1).max(365),
   digestEnabled: z.boolean(),
+  digestLanguage: z.enum(["en", "pl"]).nullable(),
   // Reader settings (nullable = opt-in, null means use client default)
   readerFontSize: z.number().int().min(12).max(24).nullable(),
   readerLineHeight: z.number().min(1.2).max(2.5).nullable(),
@@ -235,6 +236,7 @@ export const zUpdateUserSettingsSchema = zUserSettingsSchema.partial().pick({
   backupsFrequency: true,
   backupsRetentionDays: true,
   digestEnabled: true,
+  digestLanguage: true,
   readerFontSize: true,
   readerLineHeight: true,
   readerFontFamily: true,
@@ -253,4 +255,5 @@ export const zUpdateBackupSettingsSchema = zUpdateUserSettingsSchema.pick({
 
 export const zUpdateDigestSettingsSchema = zUpdateUserSettingsSchema.pick({
   digestEnabled: true,
+  digestLanguage: true,
 });

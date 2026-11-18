@@ -224,6 +224,7 @@ describe("User Routes", () => {
       backupsFrequency: "weekly",
       backupsRetentionDays: 30,
       digestEnabled: false,
+      digestLanguage: null,
 
       // Reader settings
       readerFontFamily: null,
@@ -267,6 +268,7 @@ describe("User Routes", () => {
       backupsFrequency: "daily",
       backupsRetentionDays: 7,
       digestEnabled: false,
+      digestLanguage: null,
 
       // Reader settings
       readerFontFamily: "serif",
@@ -285,6 +287,35 @@ describe("User Routes", () => {
     await expect(() => caller.users.updateSettings({})).rejects.toThrow(
       /No settings provided/,
     );
+  });
+
+  test<CustomTestContext>("digest language can be chosen and cleared", async ({
+    db,
+  }) => {
+    const user = await createTestUser(db, {
+      name: "Test User",
+      email: "digestlang@test.com",
+      password: "pass1234",
+    });
+    const caller = getApiCaller(db, user.id);
+
+    expect((await caller.users.settings()).digestLanguage).toBeNull();
+
+    await caller.users.updateSettings({ digestLanguage: "pl" });
+    expect((await caller.users.settings()).digestLanguage).toBe("pl");
+
+    // Changing something else leaves the choice alone.
+    await caller.users.updateSettings({ digestEnabled: true });
+    expect((await caller.users.settings()).digestLanguage).toBe("pl");
+
+    // null goes back to following the AI language.
+    await caller.users.updateSettings({ digestLanguage: null });
+    expect((await caller.users.settings()).digestLanguage).toBeNull();
+
+    await expect(
+      // @ts-expect-error only "en" and "pl" are accepted
+      caller.users.updateSettings({ digestLanguage: "de" }),
+    ).rejects.toThrow();
   });
 
   test<CustomTestContext>("user stats - empty user", async ({ db }) => {

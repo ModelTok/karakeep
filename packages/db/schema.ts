@@ -101,6 +101,8 @@ export const users = sqliteTable("user", {
   digestEnabled: integer("digestEnabled", { mode: "boolean" })
     .notNull()
     .default(false),
+  // Language of the digest (nullable = follow the AI "inference language" setting)
+  digestLanguage: text("digestLanguage", { enum: ["en", "pl"] }),
 
   // Reader view settings (nullable = opt-in, null means use client default)
   readerFontSize: integer("readerFontSize"),
