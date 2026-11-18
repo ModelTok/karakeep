@@ -22,6 +22,7 @@ import {
   shouldWriteBriefing,
   worthBriefing,
 } from "./utils/digestFormatter";
+import { resolveDigestLanguage } from "./utils/digestLabels";
 
 import type { RankProfile, TasteEntry } from "./utils/basalRanker";
 import type { DigestItem } from "./utils/digestFormatter";
@@ -241,6 +242,20 @@ async function recommend(
   return scores;
 }
 
+type DigestLanguageChoice = ReturnType<typeof resolveDigestLanguage>;
+
+/** The reader's digest language: their explicit choice, else the AI inference language. */
+async function loadDigestLanguage(userId: string): Promise<DigestLanguageChoice> {
+  const settings = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { inferredTagLang: true, digestLanguage: true },
+  });
+  return resolveDigestLanguage(
+    settings?.digestLanguage,
+    settings?.inferredTagLang ?? serverConfig.inference.inferredTagLang,
+  );
+}
+
 async function buildDigestMarkdown(
   jobId: string,
   userId: string,
@@ -253,6 +268,7 @@ async function buildDigestMarkdown(
     url: string;
     archived: boolean;
   }[],
+  language: DigestLanguageChoice,
   abortSignal: AbortSignal,
 ): Promise<string> {
   const tagRows = await db
@@ -296,7 +312,7 @@ async function buildDigestMarkdown(
     logger.info(
       `[digest][${jobId}] Only ${briefable.length} usable item(s); using the plain digest.`,
     );
-    return renderDigest(null, items);
+    return renderDigest(null, items, undefined, [], language.labels);
   }
 
   // With a taste profile and a Basal server, the best-fitting articles are the
@@ -326,17 +342,12 @@ async function buildDigestMarkdown(
     logger.info(
       `[digest][${jobId}] No inference provider configured; using the plain digest.`,
     );
-    return renderDigest(null, listed, undefined, picks);
+    return renderDigest(null, listed, undefined, picks, language.labels);
   }
-
-  const userSettings = await db.query.users.findFirst({
-    where: eq(users.id, userId),
-    columns: { inferredTagLang: true },
-  });
 
   const maxWords = digestWordBudget(briefable.length);
   const { prompt, includedCount } = await buildDigestPrompt(
-    userSettings?.inferredTagLang ?? serverConfig.inference.inferredTagLang,
+    language.promptLanguage,
     ranked.map(formatItemForPrompt),
     maxWords,
     serverConfig.inference.contextLength,
@@ -350,7 +361,13 @@ async function buildDigestMarkdown(
     logger.info(
       `[digest][${jobId}] Edited ${includedCount}/${briefable.length} items (${items.length} saved${scores ? `, ${picks.length} picked` : ""}) using ${result.totalTokens} tokens.`,
     );
-    return renderDigest(result.response, listed, maxWords, picks);
+    return renderDigest(
+      result.response,
+      listed,
+      maxWords,
+      picks,
+      language.labels,
+    );
   } catch (error) {
     if (abortSignal.aborted) {
       throw error;
@@ -359,7 +376,7 @@ async function buildDigestMarkdown(
     logger.warn(
       `[digest][${jobId}] Inference failed, using the plain digest: ${error}`,
     );
-    return renderDigest(null, listed, undefined, picks);
+    return renderDigest(null, listed, undefined, picks, language.labels);
   }
 }
 
@@ -425,11 +442,18 @@ async function run(req: DequeuedJob<ZDigestRequest>) {
     );
   }
 
-  const markdown = await buildDigestMarkdown(jobId, userId, rows, abortSignal);
+  const language = await loadDigestLanguage(userId);
+  const markdown = await buildDigestMarkdown(
+    jobId,
+    userId,
+    rows,
+    language,
+    abortSignal,
+  );
 
   const bookmark = await trpcClient.bookmarks.createBookmark({
     type: BookmarkTypes.TEXT,
-    title: digestTitle(DIGEST_LIST_NAME, windowStart, now),
+    title: digestTitle(DIGEST_LIST_NAME, windowStart, now, language.labels),
     text: markdown,
     source: "digest",
   });

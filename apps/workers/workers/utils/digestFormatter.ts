@@ -1,3 +1,5 @@
+import { DigestLabels, EN_LABELS } from "./digestLabels";
+
 export interface DigestRow {
   title: string | null;
   url: string;
@@ -79,13 +81,18 @@ export function digestWindowStart(lastDigestAt: Date | null, now: Date): Date {
 
 const isoDate = (d: Date): string => d.toISOString().split("T")[0];
 
-export function digestTitle(name: string, start: Date, end: Date): string {
+export function digestTitle(
+  name: string,
+  start: Date,
+  end: Date,
+  labels: DigestLabels = EN_LABELS,
+): string {
   const from = isoDate(start);
   const to = isoDate(end);
   // A window of about a day (allowing for run-time jitter) is just "today's" digest.
   return end.getTime() - start.getTime() <= DAY_MS + 60 * 60 * 1000
     ? `${name} — ${to}`
-    : `${name} — ${from} to ${to}`;
+    : `${name} — ${from} ${labels.to} ${to}`;
 }
 
 export function getDomain(url: string): string {
@@ -358,7 +365,7 @@ function resolveCitations(
     .join("\n");
 }
 
-function alsoSaved(items: DigestItem[]): string {
+function alsoSaved(items: DigestItem[], labels: DigestLabels): string {
   if (items.length === 0) {
     return "";
   }
@@ -366,9 +373,9 @@ function alsoSaved(items: DigestItem[]): string {
     .slice(0, ALSO_SAVED_LIMIT)
     .map((i) => `- ${link(i.title, i.url)}`);
   if (items.length > ALSO_SAVED_LIMIT) {
-    shown.push(`- …and ${items.length - ALSO_SAVED_LIMIT} more saved.`);
+    shown.push(`- ${labels.andMoreSaved(items.length - ALSO_SAVED_LIMIT)}`);
   }
-  return `## Also saved\n\n${shown.join("\n")}`;
+  return `## ${labels.alsoSaved}\n\n${shown.join("\n")}`;
 }
 
 /** A one-line entry, with a short note unless the page never loaded. */
@@ -380,30 +387,39 @@ function noteLine(item: DigestItem, withDomain: boolean): string {
 }
 
 /** The articles the recommendation engine thinks fit the reader best. */
-function pickedForYou(picks: DigestItem[], withNotes: boolean): string {
+function pickedForYou(
+  picks: DigestItem[],
+  withNotes: boolean,
+  labels: DigestLabels,
+): string {
   if (picks.length === 0) {
     return "";
   }
   const lines = picks.map((i) =>
     withNotes ? noteLine(i, true) : `- ${link(i.title, i.url)} (${i.domain})`,
   );
-  return `## Picked for you\n\n${lines.join("\n")}`;
+  return `## ${labels.pickedForYou}\n\n${lines.join("\n")}`;
 }
 
-function plainFallback(items: DigestItem[], picks: DigestItem[] = []): string {
+function plainFallback(
+  items: DigestItem[],
+  picks: DigestItem[],
+  labels: DigestLabels,
+): string {
   const pickIds = new Set(picks.map((p) => p.id));
   const others = items.filter((i) => !pickIds.has(i.id));
-  const header = `${items.length} ${items.length === 1 ? "link" : "links"} saved since the last digest.`;
+  const header = labels.savedSinceLast(items.length);
   // With picks, they lead; without, the first few articles do, as before.
   const lead =
     picks.length > 0
-      ? pickedForYou(picks, true)
+      ? pickedForYou(picks, true, labels)
       : others
           .slice(0, FALLBACK_HIGHLIGHTS)
           .map((i) => noteLine(i, false))
           .join("\n");
   const rest = alsoSaved(
     picks.length > 0 ? others : others.slice(FALLBACK_HIGHLIGHTS),
+    labels,
   );
   return [header, lead, rest].filter(Boolean).join("\n\n");
 }
@@ -419,9 +435,10 @@ export function renderDigest(
   items: DigestItem[],
   maxWords?: number,
   picks: DigestItem[] = [],
+  labels: DigestLabels = EN_LABELS,
 ): string {
   if (!modelOutput) {
-    return plainFallback(items, picks);
+    return plainFallback(items, picks, labels);
   }
 
   const byId = new Map(items.map((i) => [i.id, i]));
@@ -430,13 +447,13 @@ export function renderDigest(
   // A model that blows well past the word limit has usually ignored the brief
   // and started enumerating, or it hit the output cap mid-sentence.
   if (maxWords !== undefined && wordCount(text) > maxWords * 2) {
-    return plainFallback(items, picks);
+    return plainFallback(items, picks, labels);
   }
   // Mostly invented ids means the model is not describing these items.
   const ids = [...text.matchAll(/\[#(\d+)\]/g)].map((m) => Number(m[1]));
   const invented = ids.filter((id) => !byId.has(id)).length;
   if (invented > ids.length - invented) {
-    return plainFallback(items, picks);
+    return plainFallback(items, picks, labels);
   }
 
   const cited = new Set<number>();
@@ -444,13 +461,17 @@ export function renderDigest(
 
   // No usable citations means the model ignored the format; don't ship it.
   if (cited.size === 0 || body.length < 40) {
-    return plainFallback(items, picks);
+    return plainFallback(items, picks, labels);
   }
 
   // Picked articles get their own section, so they are not repeated below.
   const pickIds = new Set(picks.map((p) => p.id));
   const uncited = items.filter((i) => !cited.has(i.id) && !pickIds.has(i.id));
-  return [body, pickedForYou(picks, false), alsoSaved(uncited)]
+  return [
+    body,
+    pickedForYou(picks, false, labels),
+    alsoSaved(uncited, labels),
+  ]
     .filter(Boolean)
     .join("\n\n");
 }

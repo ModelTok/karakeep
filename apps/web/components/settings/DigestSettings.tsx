@@ -10,6 +10,13 @@ import {
   FormItem,
   FormLabel,
 } from "@/components/ui/form";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import { useTranslation } from "@/lib/i18n/client";
@@ -50,6 +57,7 @@ function DigestConfigurationForm() {
     values: settings
       ? {
           digestEnabled: settings.digestEnabled,
+          digestLanguage: settings.digestLanguage,
         }
       : undefined,
   });
@@ -101,6 +109,47 @@ function DigestConfigurationForm() {
                     onCheckedChange={field.onChange}
                   />
                 </FormControl>
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="digestLanguage"
+            render={({ field }) => (
+              <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
+                <div className="space-y-0.5">
+                  <FormLabel>
+                    {t("settings.digest.configuration.language")}
+                  </FormLabel>
+                  <FormDescription>
+                    {t("settings.digest.configuration.language_description")}
+                  </FormDescription>
+                </div>
+                <Select
+                  // Radix Select cannot hold an empty value, so "default" stands for null.
+                  value={field.value ?? "default"}
+                  onValueChange={(value) =>
+                    field.onChange(value === "default" ? null : value)
+                  }
+                >
+                  <FormControl>
+                    <SelectTrigger className="w-48">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="default">
+                      {t("settings.digest.configuration.language_default")}
+                    </SelectItem>
+                    <SelectItem value="en">
+                      {t("settings.digest.configuration.language_en")}
+                    </SelectItem>
+                    <SelectItem value="pl">
+                      {t("settings.digest.configuration.language_pl")}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
               </FormItem>
             )}
           />

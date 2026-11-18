@@ -663,7 +663,7 @@
     {
       "idx": 94,
       "version": "6",
-"when": 1785711744217,
+      "when": 1785711744217,
       "tag": "0094_migrate_to_better_auth",
       "breakpoints": true
     },
@@ -679,6 +679,13 @@
       "version": "6",
       "when": 1785586065848,
       "tag": "0096_add_digest_enabled",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "6",
+      "when": 1794995677600,
+      "tag": "0097_add_digest_language",
       "breakpoints": true
     }
   ]

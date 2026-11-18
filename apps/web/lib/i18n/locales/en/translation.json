@@ -683,6 +683,11 @@
         "title": "Digest Configuration",
         "enable_digest": "Enable Daily Digest",
         "enable_digest_description": "Every morning (06:00 UTC), create a digest bookmark summarizing links you've saved since the previous digest",
+        "language": "Digest language",
+        "language_description": "The language the digest is written in. By default it follows the inference language in your AI settings.",
+        "language_default": "Same as AI language",
+        "language_en": "English",
+        "language_pl": "Polski (Polish)",
         "send_now": "Send Digest Now",
         "save_settings": "Save Settings"
       },
