@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
-import { workerStatsCounter } from "metrics";
+import { workerStatsCounter } from "../metrics";
 import cron from "node-cron";
-import { buildImpersonatingTRPCClient } from "trpc";
-import { withWorkerEventLog, withWorkerTracing } from "workerTracing";
+import { buildImpersonatingTRPCClient } from "../trpc";
+import { withWorkerEventLog, withWorkerTracing } from "../workerTracing";
 
 import {
   orderByScore,
