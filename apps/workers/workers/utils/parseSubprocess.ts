@@ -1,4 +1,4 @@
-// Runs the HTML parsing (metadata extraction + readability) in a separate
+// Runs the HTML parsing (metadata extraction + Defuddle content extraction) in a separate
 // node process with a bounded heap, so a pathological page can't OOM the
 // worker itself.
 import * as fs from "node:fs/promises";
@@ -7,7 +7,6 @@ import * as path from "node:path";
 import { execa } from "execa";
 
 import { getTracer, withSpan } from "@karakeep/shared-server";
-import { getBookmarkDomain } from "network";
 import serverConfig from "@karakeep/shared/config";
 import logger from "@karakeep/shared/logger";
 import { tryCatch } from "@karakeep/shared/tryCatch";
@@ -16,47 +15,23 @@ import type {
   ParseSubprocessError,
   ParseSubprocessOutput,
 } from "./parseHtmlSubprocessIpc";
+import { getScriptCommand } from "./subprocessScript";
+import type { RunProxyConfig } from "../../network";
+import { getBookmarkDomain } from "../../network";
+import { truncateUrl } from "./crawlerUtils";
 import {
   parseSubprocessErrorSchema,
   parseSubprocessOutputSchema,
 } from "./parseHtmlSubprocessIpc";
-import { truncateUrl } from "./crawlerUtils";
 
 const tracer = getTracer("@karakeep/workers");
-
-function getSubprocessScriptPath(): string {
-  const currentUrl = import.meta.url;
-  if (currentUrl.includes("/dist/")) {
-    // Production: running from built output
-    return new URL("./scripts/parseHtmlSubprocess.js", currentUrl).pathname;
-  }
-  // Dev mode: running via tsx
-  return new URL("../../scripts/parseHtmlSubprocess.ts", currentUrl).pathname;
-}
-
-function getSubprocessCommand(): { cmd: string; args: string[] } {
-  const scriptPath = getSubprocessScriptPath();
-  const maxOldSpaceSize = serverConfig.crawler.parserMemLimitMb;
-
-  if (scriptPath.endsWith(".ts")) {
-    // Dev mode: use tsx to run TypeScript directly
-    return {
-      cmd: "tsx",
-      args: [`--max-old-space-size=${maxOldSpaceSize}`, scriptPath],
-    };
-  }
-
-  return {
-    cmd: process.execPath,
-    args: [`--max-old-space-size=${maxOldSpaceSize}`, scriptPath],
-  };
-}
 
 export async function runParseSubprocess(
   htmlContent: string,
   url: string,
   jobId: string,
   abortSignal: AbortSignal,
+  runProxy: RunProxyConfig,
   opts?: { metadataOnly?: boolean },
 ): Promise<{
   metadata: ParseSubprocessOutput["metadata"];
@@ -78,7 +53,10 @@ export async function runParseSubprocess(
         `[Crawler][${jobId}] Spawning parse subprocess for "${truncateUrl(url)}" ...`,
       );
 
-      const { cmd, args } = getSubprocessCommand();
+      const { cmd, args } = getScriptCommand(
+        "parseHtmlSubprocess",
+        serverConfig.crawler.parserMemLimitMb,
+      );
       const timeoutMs = serverConfig.crawler.parseTimeoutSec * 1000;
 
       // Hand the HTML to the subprocess via a temp file instead of stdin. The
@@ -102,6 +80,13 @@ export async function runParseSubprocess(
             timeout: timeoutMs,
             reject: false,
             stderr: "inherit",
+            // The metadata extraction fetches some URLs itself (e.g. Reddit's
+            // JSON API): send those through the crawl's proxy too.
+            env: {
+              CRAWLER_HTTP_PROXY: runProxy.httpProxy,
+              CRAWLER_HTTPS_PROXY: runProxy.httpsProxy,
+              CRAWLER_NO_PROXY: runProxy.noProxy?.join(","),
+            },
           })(cmd, args);
         } finally {
           await tryCatch(fs.rm(tmpDir, { recursive: true, force: true }));

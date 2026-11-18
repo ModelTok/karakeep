@@ -303,6 +303,34 @@ export class OpenAIEmbeddingClient implements EmbeddingClient {
   }
 }
 
+function extractOpenAIMessageContent(
+  chatCompletion: OpenAI.Chat.Completions.ChatCompletion,
+  opts: { allowEmpty: boolean },
+): string {
+  const choice = chatCompletion.choices[0];
+  if (!choice) {
+    throw new Error(`Got no choices in the response from OpenAI`);
+  }
+  const content = choice.message.content;
+  if (content) {
+    return content;
+  }
+  if (choice.message.refusal) {
+    throw new Error(`OpenAI refused the request: ${choice.message.refusal}`);
+  }
+  if (choice.finish_reason === "length") {
+    throw new Error(
+      `Got no message content from OpenAI: the model hit the output token limit (INFERENCE_MAX_OUTPUT_TOKENS) before producing an answer. If you're using a reasoning model, consider increasing INFERENCE_MAX_OUTPUT_TOKENS.`,
+    );
+  }
+  if (opts.allowEmpty && choice.finish_reason === "stop") {
+    return "";
+  }
+  throw new Error(
+    `Got no message content from OpenAI (finish_reason: ${choice.finish_reason})`,
+  );
+}
+
 export class OpenAIInferenceClient implements InferenceClient {
   openAI: OpenAI;
   private config: OpenAIInferenceConfig;
@@ -361,10 +389,9 @@ export class OpenAIInferenceClient implements InferenceClient {
       ),
     );
 
-    const response = chatCompletion.choices[0].message.content;
-    if (!response) {
-      throw new Error(`Got no message content from OpenAI`);
-    }
+    const response = extractOpenAIMessageContent(chatCompletion, {
+      allowEmpty: false,
+    });
     return { response, totalTokens: chatCompletion.usage?.total_tokens };
   }
 
@@ -414,10 +441,12 @@ export class OpenAIInferenceClient implements InferenceClient {
       ),
     );
 
-    const response = chatCompletion.choices[0].message.content;
-    if (!response) {
-      throw new Error(`Got no message content from OpenAI`);
-    }
+    // Free-form image prompts (e.g. OCR) can legitimately produce an empty
+    // answer when there's nothing to extract, so don't treat that as an error.
+    // Structured requests (e.g. tagging) always expect a JSON payload.
+    const response = extractOpenAIMessageContent(chatCompletion, {
+      allowEmpty: optsWithDefaults.schema === null,
+    });
     return { response, totalTokens: chatCompletion.usage?.total_tokens };
   }
 
@@ -455,7 +484,7 @@ export interface OllamaInferenceConfig {
   outputSchema: "structured" | "json" | "plain";
 }
 
-class OllamaInferenceClient implements InferenceClient {
+export class OllamaInferenceClient implements InferenceClient {
   ollama: Ollama;
   private config: OllamaInferenceConfig;
 
@@ -490,6 +519,11 @@ class OllamaInferenceClient implements InferenceClient {
       ...defaultInferenceOptions,
       ..._opts,
     };
+
+    // The request is only cancelled through `onabort` below, which never fires
+    // for a signal that has already aborted (e.g. the job timed out before
+    // getting here), so check it up front.
+    optsWithDefaults.abortSignal?.throwIfAborted();
 
     let newAbortSignal = undefined;
     if (optsWithDefaults.abortSignal) {

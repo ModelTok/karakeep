@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
-import { workerStatsCounter } from "metrics";
-import { withWorkerEventLog, withWorkerTracing } from "workerTracing";
+import { workerStatsCounter } from "../metrics";
+import { withWorkerEventLog, withWorkerTracing } from "../workerTracing";
 
 import { db } from "@karakeep/db";
 import { bookmarkLinks } from "@karakeep/db/schema";

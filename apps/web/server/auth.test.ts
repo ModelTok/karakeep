@@ -6,6 +6,8 @@ import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 
+import type { RateLimitConfig } from "@karakeep/shared/ratelimiting";
+
 import { getInMemoryDB } from "@karakeep/db/drizzle";
 import { accounts, sessions, users } from "@karakeep/db/schema";
 
@@ -126,6 +128,9 @@ describe("better-auth configuration", () => {
     expect(firstUser?.bookmarkQuota).toBe(42);
     expect(firstUser?.emailVerified).toBe(false);
     expect(secondUser?.role).toBe("user");
+    // New accounts open the preview, while the column default is for existing
+    // accounts that predate this.
+    expect(firstUser?.bookmarkClickAction).toBe("expand_bookmark_preview");
 
     const credential = await db.query.accounts.findFirst({
       where: eq(accounts.userId, firstUser?.id ?? ""),
@@ -547,10 +552,10 @@ describe("oauth token endpoint authentication", () => {
     });
 
     const start = await auth.handler(
-      new Request(`${BASE_URL}/api/auth/sign-in/oauth2`, {
+      new Request(`${BASE_URL}/api/auth/sign-in/social`, {
         method: "POST",
         headers: { "content-type": "application/json", origin: BASE_URL },
-        body: JSON.stringify({ providerId: "custom", callbackURL: "/" }),
+        body: JSON.stringify({ provider: "custom", callbackURL: "/" }),
       }),
     );
     const { url } = z.object({ url: z.string() }).parse(await start.json());
@@ -561,7 +566,7 @@ describe("oauth token endpoint authentication", () => {
       .join("; ");
     const callback = await auth.handler(
       new Request(
-        `${BASE_URL}/api/auth/oauth2/callback/custom?code=the-code&state=${state}`,
+        `${BASE_URL}/api/auth/callback/custom?code=the-code&state=${state}`,
         { headers: { cookie } },
       ),
     );
@@ -602,5 +607,106 @@ describe("oauth token endpoint authentication", () => {
     const form = new URLSearchParams(await request.text());
     expect(form.get("client_id")).toBe("karakeep");
     expect(form.get("client_secret")).toBe("a+b/c=%41 d");
+  });
+
+  test("public clients authenticate with PKCE only", async () => {
+    const { callback, tokenRequests } = await signInWithOAuth({
+      OAUTH_CLIENT_SECRET: "",
+    });
+    expect(callback.headers.get("location")).toBe("/");
+    const [request] = tokenRequests;
+    expect(request.headers.get("authorization")).toBeNull();
+    const form = new URLSearchParams(await request.text());
+    expect(form.get("client_id")).toBe("karakeep");
+    expect(form.has("client_secret")).toBe(false);
+    expect(form.get("code_verifier")).toBeTruthy();
+  });
+});
+
+describe("rate limiting", () => {
+  // A minimal fixed-window limiter standing in for the rate limit plugin.
+  function createLimiter() {
+    const counts = new Map<string, number>();
+    return {
+      checkRateLimit(config: RateLimitConfig, key: string) {
+        const k = `${config.name}:${key}`;
+        const n = (counts.get(k) ?? 0) + 1;
+        counts.set(k, n);
+        return n <= config.maxRequests
+          ? { allowed: true as const }
+          : { allowed: false as const, resetInSeconds: 60 };
+      },
+      reset() {
+        counts.clear();
+      },
+      clear() {
+        counts.clear();
+      },
+    };
+  }
+
+  async function setupWithRateLimits() {
+    const limiter = createLimiter();
+    vi.doMock("@karakeep/shared/ratelimiting", async (importOriginal) => ({
+      ...(await importOriginal<
+        typeof import("@karakeep/shared/ratelimiting")
+      >()),
+      getRateLimitClient: async () => limiter,
+    }));
+    return await setup({ RATE_LIMITING_ENABLED: "true" });
+  }
+
+  afterEach(() => {
+    vi.doUnmock("@karakeep/shared/ratelimiting");
+  });
+
+  test("spoofed client-IP headers don't reset the login limit", async () => {
+    const { call } = await setupWithRateLimits();
+    const attempt = (i: number) =>
+      call("/sign-in/email", {
+        body: { email: "victim@example.com", password: `guess-${i}` },
+        headers: {
+          // The client rotates these; the proxy appends the real address.
+          "x-client-ip": `198.51.100.${i}`,
+          "x-real-ip": `198.51.100.${i}`,
+          "x-forwarded-for": `198.51.100.${i}, 203.0.113.7`,
+        },
+      });
+
+    for (let i = 0; i < 10; i++) {
+      expect((await attempt(i)).status).toBe(401);
+    }
+    expect((await attempt(10)).status).toBe(429);
+  });
+
+  test("limits login attempts per email across client IPs", async () => {
+    const { call } = await setupWithRateLimits();
+    const attempt = (i: number) =>
+      call("/sign-in/email", {
+        body: {
+          email: i % 2 ? "Victim@Example.com" : "victim@example.com",
+          password: `guess-${i}`,
+        },
+        headers: { "x-forwarded-for": `203.0.113.${i}` },
+      });
+
+    for (let i = 0; i < 50; i++) {
+      expect((await attempt(i)).status).toBe(401);
+    }
+    expect((await attempt(50)).status).toBe(429);
+  });
+
+  test("limits password reset requests per email, even without an IP", async () => {
+    const { call } = await setupWithRateLimits();
+    const request = () =>
+      call("/request-password-reset", {
+        body: { email: "victim@example.com" },
+      });
+
+    // SMTP isn't configured, so allowed requests fail with 400.
+    for (let i = 0; i < 5; i++) {
+      expect((await request()).status).toBe(400);
+    }
+    expect((await request()).status).toBe(429);
   });
 });
