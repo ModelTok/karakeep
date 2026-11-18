@@ -106,6 +106,10 @@ export const DigestSchedulingWorker = cron.schedule(
     scheduled: false,
     // Pin the zone so "06:00" does not depend on the host's TZ.
     timezone: "UTC",
+    // node-cron only fires if a once-a-second check lands inside the 06:00:00 second;
+    // without this a late check silently drops the whole day's digest. The
+    // per-user-per-day idempotency key makes a late (or repeated) run harmless.
+    recoverMissedExecutions: true,
   },
 );
 
