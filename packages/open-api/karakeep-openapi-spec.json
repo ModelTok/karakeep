@@ -48,7 +48,7 @@
       "url": "{address}/api/v1",
       "variables": {
         "address": {
-          "default": "https://try.karakeep.app",
+          "default": "https://try.karakeep.com",
           "description": "The address of the Karakeep server"
         }
       }
@@ -466,6 +466,10 @@
                 "fileName": {
                   "type": "string",
                   "nullable": true
+                },
+                "size": {
+                  "type": "number",
+                  "nullable": true
                 }
               },
               "required": [
@@ -666,6 +670,14 @@
             "type": "string",
             "nullable": true
           },
+          "prefix": {
+            "type": "string",
+            "nullable": true
+          },
+          "suffix": {
+            "type": "string",
+            "nullable": true
+          },
           "note": {
             "type": "string",
             "nullable": true
@@ -686,6 +698,8 @@
           "startOffset",
           "endOffset",
           "text",
+          "prefix",
+          "suffix",
           "note",
           "id",
           "userId",
@@ -729,7 +743,7 @@
           "highlights": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Highlight"
+              "$ref": "#/components/schemas/HighlightWithBookmark"
             }
           },
           "nextCursor": {
@@ -741,6 +755,86 @@
         "required": [
           "highlights",
           "nextCursor"
+        ]
+      },
+      "HighlightWithBookmark": {
+        "type": "object",
+        "properties": {
+          "bookmarkId": {
+            "type": "string"
+          },
+          "startOffset": {
+            "type": "number"
+          },
+          "endOffset": {
+            "type": "number"
+          },
+          "color": {
+            "type": "string",
+            "enum": [
+              "yellow",
+              "red",
+              "green",
+              "blue"
+            ],
+            "default": "yellow"
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "prefix": {
+            "type": "string",
+            "nullable": true
+          },
+          "suffix": {
+            "type": "string",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "bookmark": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "nullable": true
+              },
+              "url": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "title",
+              "url"
+            ]
+          }
+        },
+        "required": [
+          "bookmarkId",
+          "startOffset",
+          "endOffset",
+          "text",
+          "prefix",
+          "suffix",
+          "note",
+          "id",
+          "userId",
+          "createdAt",
+          "bookmark"
         ]
       },
       "UploadedAsset": {
@@ -2387,6 +2481,10 @@
                     "fileName": {
                       "type": "string",
                       "nullable": true
+                    },
+                    "size": {
+                      "type": "number",
+                      "nullable": true
                     }
                   },
                   "required": [
@@ -3610,6 +3708,14 @@
                     "default": "yellow"
                   },
                   "text": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "prefix": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "suffix": {
                     "type": "string",
                     "nullable": true
                   },

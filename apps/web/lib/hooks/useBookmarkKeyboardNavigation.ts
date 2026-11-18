@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { useArchiveBookmarkWithUndo } from "@/components/dashboard/bookmarks/useArchiveBookmarkWithUndo";
 import { useSession } from "@/lib/auth/client";
 import useBulkActionsStore from "@/lib/bulkActions";
 import { useBookmarkBulkMutations } from "@/lib/hooks/useBookmarkBulkActions";
@@ -9,7 +10,6 @@ import { useKeyboardNavigationStore } from "@/lib/store/useKeyboardNavigationSto
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 
-import { useBookmarkGridContext } from "@karakeep/shared-react/hooks/bookmark-grid-context";
 import type { ZBookmark } from "@karakeep/shared/types/bookmarks";
 
 import { useTranslation } from "../i18n/client";
@@ -346,19 +346,15 @@ function useBookmarkOpenHotkeys({
   withFocusedBookmark: (action: (bookmark: ZBookmark) => void) => void;
 }) {
   const router = useRouter();
-  const gridQuery = useBookmarkGridContext();
 
   useHotkeys(
     "o,enter",
     () =>
-      withFocusedBookmark((bookmark) => {
-        const url = gridQuery
-          ? `/dashboard/preview/${bookmark.id}?listQuery=${encodeURIComponent(JSON.stringify(gridQuery))}`
-          : `/dashboard/preview/${bookmark.id}`;
-        router.push(url);
-      }),
+      withFocusedBookmark((bookmark) =>
+        router.push(`/dashboard/preview/${bookmark.id}`),
+      ),
     { enabled: !disabled && isNavigating, preventDefault: true },
-    [disabled, gridQuery, isNavigating, router, withFocusedBookmark],
+    [disabled, isNavigating, router, withFocusedBookmark],
   );
 }
 
@@ -383,6 +379,7 @@ function useBookmarkUpdateHotkeys({
   withOwnedFocusedBookmark: (action: (bookmark: ZBookmark) => void) => void;
 }) {
   const { t } = useTranslation();
+  const { setArchived } = useArchiveBookmarkWithUndo();
 
   useHotkeys(
     "f",
@@ -394,18 +391,12 @@ function useBookmarkUpdateHotkeys({
           })
           .catch(() => undefined);
       } else {
+        // No success toast, like the card's star: the star shows the result
         withOwnedFocusedBookmark((bookmark) =>
-          updateBookmarkMutator.mutate(
-            {
-              bookmarkId: bookmark.id,
-              favourited: !bookmark.favourited,
-            },
-            {
-              onSuccess: () => {
-                toast.success(t("toasts.bookmarks.updated"));
-              },
-            },
-          ),
+          updateBookmarkMutator.mutate({
+            bookmarkId: bookmark.id,
+            favourited: !bookmark.favourited,
+          }),
         );
       }
     },
@@ -432,17 +423,7 @@ function useBookmarkUpdateHotkeys({
           .catch(() => undefined);
       } else {
         withOwnedFocusedBookmark((bookmark) =>
-          updateBookmarkMutator.mutate(
-            {
-              bookmarkId: bookmark.id,
-              archived: !bookmark.archived,
-            },
-            {
-              onSuccess: () => {
-                toast.success(t("toasts.bookmarks.updated"));
-              },
-            },
-          ),
+          setArchived(bookmark.id, !bookmark.archived),
         );
       }
     },
@@ -451,9 +432,9 @@ function useBookmarkUpdateHotkeys({
       disabled,
       hasBulkSelection,
       isNavigating,
+      setArchived,
       setSelectedBookmarksToNextState,
       t,
-      updateBookmarkMutator,
       withOwnedFocusedBookmark,
     ],
   );
@@ -598,7 +579,12 @@ function useBookmarkGlobalHotkeys({
         clearFocus();
       }
     },
-    { enabled: !disabled },
+    {
+      enabled: !disabled,
+      // A dialog or menu already handled this Esc (Radix prevents default
+      // when it dismisses), e.g. the bulk "Add to list" or "Edit tags" dialogs
+      ignoreEventWhen: (e) => e.defaultPrevented,
+    },
     [disabled, bulkActionsStore.isBulkEditEnabled],
   );
 
@@ -620,12 +606,19 @@ export function useBookmarkKeyboardNavigation({
   const shortcutsDialogOpen = useKeyboardNavigationStore(
     (state) => state.shortcutsDialogOpen,
   );
+  const newItemDialogOpen = useKeyboardNavigationStore(
+    (state) => state.newItemDialogOpen,
+  );
+  // The grid's hotkeys stay live behind the preview, so they are paused while it is open.
   const isPreviewModalOpen = useKeyboardNavigationStore(
     (state) => state.isPreviewModalOpen,
   );
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const disabled =
-    shortcutsDialogOpen || deleteDialogOpen || isPreviewModalOpen;
+    shortcutsDialogOpen ||
+    newItemDialogOpen ||
+    deleteDialogOpen ||
+    isPreviewModalOpen;
   const hasBookmarks = bookmarks.length > 0;
   const canMutateBookmark = useBookmarkOwnership();
   const bulkActionsStore = useBulkActionsStore();

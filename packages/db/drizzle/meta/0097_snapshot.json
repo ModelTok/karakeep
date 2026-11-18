@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "583ce6ff-a49e-4530-b617-b822f1aa7e98",
-  "prevId": "57e9ebfd-4777-4113-9ce9-2af5c6678eeb",
+  "id": "d02183f9-dc53-4bc5-be51-e42153495c3a",
+  "prevId": "c31d84ca-0026-4898-b6a7-0409258d0aa4",
   "tables": {
     "account": {
       "name": "account",
@@ -300,10 +300,14 @@
           ],
           "isUnique": false
         },
-        "assets_userId_idx": {
-          "name": "assets_userId_idx",
+        "assets_userId_size_idx": {
+          "name": "assets_userId_size_idx",
           "columns": [
-            "userId"
+            "userId",
+            "size",
+            "id",
+            "assetType",
+            "bookmarkId"
           ],
           "isUnique": false
         }
@@ -659,20 +663,6 @@
           "notNull": false,
           "autoincrement": false,
           "default": 200
-        },
-        "transcript": {
-          "name": "transcript",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "transcriptionStatus": {
-          "name": "transcriptionStatus",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "probeMetadataAt": {
           "name": "probeMetadataAt",
@@ -1554,6 +1544,20 @@
           "notNull": false,
           "autoincrement": false
         },
+        "prefix": {
+          "name": "prefix",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "suffix": {
+          "name": "suffix",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "note": {
           "name": "note",
           "type": "text",
@@ -1577,10 +1581,12 @@
           ],
           "isUnique": false
         },
-        "highlights_userId_idx": {
-          "name": "highlights_userId_idx",
+        "highlights_userId_createdAt_id_idx": {
+          "name": "highlights_userId_createdAt_id_idx",
           "columns": [
-            "userId"
+            "userId",
+            "createdAt",
+            "id"
           ],
           "isUnique": false
         }
@@ -2064,6 +2070,125 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "inAppSubscriptions": {
+      "name": "inAppSubscriptions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "store": {
+          "name": "store",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "productId": {
+          "name": "productId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cancelAtPeriodEnd": {
+          "name": "cancelAtPeriodEnd",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "billingIssue": {
+          "name": "billingIssue",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "isSandbox": {
+          "name": "isSandbox",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "startDate": {
+          "name": "startDate",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "endDate": {
+          "name": "endDate",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "modifiedAt": {
+          "name": "modifiedAt",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "inAppSubscriptions_userId_unique": {
+          "name": "inAppSubscriptions_userId_unique",
+          "columns": [
+            "userId"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "inAppSubscriptions_userId_user_id_fk": {
+          "name": "inAppSubscriptions_userId_user_id_fk",
+          "tableFrom": "inAppSubscriptions",
+          "tableTo": "user",
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -3393,21 +3518,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": 30
-        },
-        "digestEnabled": {
-          "name": "digestEnabled",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "digestLanguage": {
-          "name": "digestLanguage",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "readerFontSize": {
           "name": "readerFontSize",

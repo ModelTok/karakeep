@@ -59,6 +59,10 @@ export async function updateShowSummary(showSummary: boolean) {
   await readModifyWrite(() => ({ showSummary }));
 }
 
+export async function updateShowNewItemCard(showNewItemCard: boolean) {
+  await readModifyWrite(() => ({ showNewItemCard }));
+}
+
 export async function updateImageFit(imageFit: "cover" | "contain") {
   await readModifyWrite(() => ({ imageFit }));
 }

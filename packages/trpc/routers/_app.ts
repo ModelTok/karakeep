@@ -12,6 +12,7 @@ import { importSessionsRouter } from "./importSessions";
 import { invitesAppRouter } from "./invites";
 import { listsAppRouter } from "./lists";
 import { promptsAppRouter } from "./prompts";
+import { problemReportsAppRouter } from "./problemReports";
 import { publicBookmarks } from "./publicBookmarks";
 import { rulesAppRouter } from "./rules";
 import { subscriptionsRouter } from "./subscriptions";
@@ -39,6 +40,7 @@ export const appRouter = router({
   publicBookmarks: publicBookmarks,
   subscriptions: subscriptionsRouter,
   config: configAppRouter,
+  problemReports: problemReportsAppRouter,
 });
 // export type definition of API
 export type AppRouter = typeof appRouter;

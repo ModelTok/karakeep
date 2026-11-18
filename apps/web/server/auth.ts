@@ -1,9 +1,9 @@
 import { cache } from "react";
 import { TURNSTILE_TOKEN_HEADER } from "@/lib/auth/constants";
+import { getClientIp } from "@/server/clientIp";
 import { createId } from "@paralleldrive/cuid2";
 import { count } from "drizzle-orm";
 import { headers } from "next/headers";
-import requestIp from "request-ip";
 import { z } from "zod";
 
 import { betterAuth } from "better-auth";
@@ -63,8 +63,8 @@ const ALLOWED_PATHS = new Set([
   "/request-password-reset",
   "/reset-password",
   "/change-password",
-  "/sign-in/oauth2",
-  "/oauth2/callback/:providerId",
+  "/sign-in/social",
+  "/callback/:id",
 ]);
 
 const PASSWORD_PATHS = new Set([
@@ -84,8 +84,8 @@ const READ_ONLY_PATHS = new Set(["/ok", "/error", "/get-session"]);
 const SESSION_PATHS = new Set([
   "/sign-in/email",
   "/sign-out",
-  "/sign-in/oauth2",
-  "/oauth2/callback/:providerId",
+  "/sign-in/social",
+  "/callback/:id",
 ]);
 
 const RATE_LIMITS: Record<string, RateLimitConfig> = {
@@ -121,6 +121,23 @@ const RATE_LIMITS: Record<string, RateLimitConfig> = {
   },
   "/change-password": {
     name: "auth.changePassword",
+    windowMs: 15 * 60 * 1000,
+    maxRequests: 5,
+  },
+};
+
+// Limits per target email, on top of the per-IP ones above. They keep working
+// when the client IP can't be trusted (e.g. an instance exposed without a
+// reverse proxy), at the cost of letting someone use up an account's budget.
+// The login limit is set well above the per-IP one so that takes effort.
+const PER_EMAIL_RATE_LIMITS: Record<string, RateLimitConfig> = {
+  "/sign-in/email": {
+    name: "auth.login.perEmail",
+    windowMs: 15 * 60 * 1000,
+    maxRequests: 50,
+  },
+  "/request-password-reset": {
+    name: "auth.requestPasswordReset.perEmail",
     windowMs: 15 * 60 * 1000,
     maxRequests: 5,
   },
@@ -204,12 +221,6 @@ function getTrustedOrigins(request: Request | undefined): string[] {
   return origins;
 }
 
-function getClientIp(requestHeaders: Headers | undefined) {
-  return requestIp.getClientIp({
-    headers: requestHeaders ? Object.fromEntries(requestHeaders.entries()) : {},
-  });
-}
-
 function getRequestEmail(body: unknown) {
   const parsed = zEmailBody.safeParse(body);
   return parsed.success ? parsed.data.email.trim().toLowerCase() : undefined;
@@ -220,28 +231,44 @@ async function checkRateLimit(
   ip: string | null,
   email: string | undefined,
 ) {
-  const config = RATE_LIMITS[path];
-  if (!config || !serverConfig.rateLimiting.enabled || !ip) {
+  if (!serverConfig.rateLimiting.enabled) {
+    return;
+  }
+  const checks: [RateLimitConfig, string][] = [];
+  const ipConfig = RATE_LIMITS[path];
+  if (ipConfig && ip) {
+    checks.push([
+      ipConfig,
+      path === "/sign-in/email"
+        ? `login:${ip}:${email ?? ""}`
+        : `${ip}:${path}`,
+    ]);
+  }
+  const emailConfig = PER_EMAIL_RATE_LIMITS[path];
+  if (emailConfig && email) {
+    checks.push([emailConfig, `email:${email}`]);
+  }
+  if (checks.length === 0) {
     return;
   }
   const client = await getRateLimitClient();
   if (!client) {
     return;
   }
-  const key =
-    path === "/sign-in/email" ? `login:${ip}:${email ?? ""}` : `${ip}:${path}`;
-  const result = await client.checkRateLimit(config, key);
-  if (!result.allowed) {
-    if (path === "/sign-in/email") {
-      logEvent({
-        "event.name": "user.login_failed",
-        "user.email": email,
-        "auth.failure_reason": "rate_limited",
+  for (const [config, key] of checks) {
+    const result = await client.checkRateLimit(config, key);
+    if (!result.allowed) {
+      if (path === "/sign-in/email") {
+        logEvent({
+          "event.name": "user.login_failed",
+          "user.email": email,
+          "auth.failure_reason": "rate_limited",
+        });
+      }
+      throw new APIError("TOO_MANY_REQUESTS", {
+        message: `Rate limit exceeded. Try again in ${result.resetInSeconds} seconds.`,
       });
     }
-    throw new APIError("TOO_MANY_REQUESTS", {
-      message: `Rate limit exceeded. Try again in ${result.resetInSeconds} seconds.`,
-    });
   }
 }
 
@@ -342,44 +369,32 @@ function buildVerificationUrl(email: string, token: string, url: string) {
   return verificationUrl.toString();
 }
 
-// RFC 6749 section 2.3.1 requires the client credentials to be form-urlencoded
-// before they're put in the Basic authorization header, as next-auth did.
-// better-auth puts them there as is, which breaks secrets containing characters
-// like "+" or "%" on providers that decode them (e.g. Keycloak and Dex). With
-// client_secret_post, the secret is sent in the (already encoded) form body.
-function encodeClientSecret(
-  secret: string | undefined,
-  authentication: "basic" | "post",
-) {
-  if (secret === undefined || authentication === "post") {
-    return secret;
-  }
-  return encodeURIComponent(secret).replace(/%20/g, "+");
-}
-
 function createOAuthConfig(): GenericOAuthConfig | null {
   const oauth = serverConfig.auth.oauth;
   if (!oauth.wellKnownUrl || !oauth.clientId) {
     return null;
   }
-  const authentication =
-    oauth.tokenEndpointAuthMethod === "client_secret_post" ? "post" : "basic";
 
   return {
     providerId: CUSTOM_OAUTH_PROVIDER_ID,
     discoveryUrl: oauth.wellKnownUrl,
     clientId: oauth.clientId,
-    clientSecret: encodeClientSecret(oauth.clientSecret, authentication),
+    clientSecret: oauth.clientSecret,
     scopes: oauth.scope.split(/\s+/).filter(Boolean),
-    // Keep the callback url of the next-auth days so that existing OAuth
-    // client configurations keep working. See the auth route handler.
+    // The callback url of the next-auth days, so that existing OAuth client
+    // configurations keep working.
     redirectURI: `${serverConfig.publicUrl}/api/auth/callback/${CUSTOM_OAUTH_PROVIDER_ID}`,
     pkce: true,
-    authentication,
+    // Without a secret, it's a public client that relies on PKCE alone.
+    tokenEndpointAuth: oauth.clientSecret
+      ? { method: oauth.tokenEndpointAuthMethod }
+      : { method: "none" },
     disableSignUp: serverConfig.auth.disableSignups,
-    mapProfileToUser(profile: Record<string, unknown>) {
+    // Existing accounts were linked by this id, so keep deriving it the same
+    // way rather than relying on better-auth's default (`sub` only).
+    accountSubject: ({ profile }) => String(profile.sub ?? profile.id ?? ""),
+    mapProfileToUser(profile) {
       return {
-        id: String(profile.sub ?? profile.id ?? ""),
         name: normalizeSafeDisplayName(
           typeof profile.name === "string" ? profile.name : null,
         ),
@@ -499,6 +514,12 @@ export const auth = betterAuth({
         input: false,
         returned: false,
       },
+      bookmarkClickAction: {
+        type: ["open_original_link", "expand_bookmark_preview"],
+        required: false,
+        input: false,
+        returned: false,
+      },
     },
   },
   account: {
@@ -529,6 +550,9 @@ export const auth = betterAuth({
               role: (await isFirstUser()) ? "admin" : "user",
               bookmarkQuota: serverConfig.quotas.free.bookmarkLimit,
               storageQuota: serverConfig.quotas.free.assetSizeBytes,
+              // New accounts open the preview. The column default stays
+              // "open_original_link" so existing users keep what they have.
+              bookmarkClickAction: "expand_bookmark_preview",
             },
           };
         },
@@ -555,7 +579,7 @@ export const auth = betterAuth({
           logEvent({
             "event.name": "user.login",
             "user.id": session.userId,
-            "auth.provider": context?.path.startsWith("/oauth2/")
+            "auth.provider": context?.path.startsWith("/callback/")
               ? "oauth"
               : "credentials",
           });

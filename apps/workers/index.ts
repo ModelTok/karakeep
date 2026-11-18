@@ -1,7 +1,5 @@
 import "dotenv/config";
 
-import { buildServer } from "server";
-
 import {
   AdminMaintenanceQueue,
   AssetPreprocessingQueue,
@@ -29,6 +27,7 @@ import serverConfig from "@karakeep/shared/config";
 import logger from "@karakeep/shared/logger";
 
 import { shutdownPromise } from "./exit";
+import { buildServer } from "./server";
 
 let backupSchedulingWorker:
   | typeof import("./workers/backupWorker").BackupSchedulingWorker
@@ -142,7 +141,49 @@ function isWorkerEnabled(name: WorkerName) {
   return true;
 }
 
+/**
+ * Runs the worker as a stateless remote sandbox (SANDBOX_REMOTE_SERVER_ENABLED):
+ * no queues, database or asset store, just the HTTP API that other workers
+ * (configured with SANDBOX_REMOTE_URL) hand their untrusted work to: the
+ * crawling, the video downloads and the asset preprocessing.
+ */
+async function runAsSandbox(token: string) {
+  const { localCrawler } = await import("./workers/crawler/localCrawler");
+  const { buildSandboxRoutes } = await import("./workers/sandbox/server");
+  const { SANDBOX_BASE_PATH } = await import("./workers/sandbox/protocol");
+
+  await initTracing("workers");
+  await initEventLogger("workers");
+  logger.info(`Workers version: ${serverConfig.serverVersion ?? "not set"}`);
+  logger.info("Starting as a stateless remote sandbox ...");
+  await localCrawler.init();
+
+  const httpServer = buildServer({
+    [SANDBOX_BASE_PATH]: buildSandboxRoutes(token),
+  });
+
+  let exitCode = 0;
+  await Promise.race([
+    httpServer.serve().catch((err: unknown) => {
+      exitCode = 1;
+      logger.error(`The remote sandbox server failed, shutting down: ${err}`);
+    }),
+    shutdownPromise,
+  ]);
+
+  logger.info("Shutting down the remote sandbox ...");
+  await httpServer.stop();
+  await shutdownEventLogger();
+  await shutdownTracing();
+  process.exit(exitCode);
+}
+
 async function main() {
+  const { serverEnabled, token } = serverConfig.sandbox;
+  if (serverEnabled && token) {
+    return runAsSandbox(token);
+  }
+
   await loadAllPlugins();
   await initTracing("workers");
   await initEventLogger("workers");

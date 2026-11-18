@@ -4,11 +4,14 @@ interface KeyboardNavigationState {
   focusedIndex: number;
   isNavigating: boolean;
   shortcutsDialogOpen: boolean;
+  newItemDialogOpen: boolean;
+  /** A bookmark preview (modal or full page) is open over the grid. */
   isPreviewModalOpen: boolean;
   setFocusedIndex: (index: number) => void;
   clearFocus: () => void;
   moveBy: (delta: number, maxIndex: number) => void;
   setShortcutsDialogOpen: (open: boolean) => void;
+  setNewItemDialogOpen: (open: boolean) => void;
   setIsPreviewModalOpen: (open: boolean) => void;
 }
 
@@ -17,6 +20,7 @@ export const useKeyboardNavigationStore = create<KeyboardNavigationState>(
     focusedIndex: -1,
     isNavigating: false,
     shortcutsDialogOpen: false,
+    newItemDialogOpen: false,
     isPreviewModalOpen: false,
 
     setFocusedIndex: (index) =>
@@ -36,7 +40,7 @@ export const useKeyboardNavigationStore = create<KeyboardNavigationState>(
       }),
 
     setShortcutsDialogOpen: (open) => set({ shortcutsDialogOpen: open }),
-
+    setNewItemDialogOpen: (open) => set({ newItemDialogOpen: open }),
     setIsPreviewModalOpen: (open) => set({ isPreviewModalOpen: open }),
   }),
 );
